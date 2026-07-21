@@ -1,8 +1,3 @@
-// GET /api/bling/callback?code=...
-// O Bling redireciona o usuário para cá depois que ele autoriza o app.
-// Aqui trocamos o authorization_code pelo access_token + refresh_token
-// e salvamos os dois no Supabase (tabela bling_tokens).
-
 import { createClient } from "@supabase/supabase-js";
 
 export default async function handler(req, res) {
@@ -45,7 +40,7 @@ export default async function handler(req, res) {
         .send(`Erro ao obter tokens do Bling: ${JSON.stringify(tokenData)}`);
     }
 
-    // tokenData deve conter: access_token, refresh_token, expires_in, token_type, scope
+    // tokenData
     const expiresAt = new Date(Date.now() + tokenData.expires_in * 1000).toISOString();
 
     const supabase = createClient(
