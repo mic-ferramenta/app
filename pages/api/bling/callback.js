@@ -17,7 +17,7 @@ export default async function handler(req, res) {
   const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
 
   try {
-    const tokenResp = await fetch("https://www.bling.com.br/Api/v3/oauth/token", {
+    const tokenResp = await fetch("https://api.bling.com.br/Api/v3/oauth/token", {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
