@@ -8,7 +8,7 @@
 
 const { createClient } = require("@supabase/supabase-js");
 
-const BLING_BASE_URL = "https://www.bling.com.br/Api/v3";
+const BLING_BASE_URL = "https://api.bling.com.br/Api/v3";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,

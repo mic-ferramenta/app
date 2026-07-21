@@ -9,7 +9,7 @@ export default function handler(req, res) {
   // "state" é um valor aleatório só para proteção contra CSRF.
   const state = Math.random().toString(36).slice(2);
 
-  const url = new URL("https://www.bling.com.br/Api/v3/oauth/authorize");
+  const url = new URL("https://api.bling.com.br/Api/v3/oauth/authorize");
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", clientId);
   url.searchParams.set("state", state);
