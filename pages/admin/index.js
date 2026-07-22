@@ -3,17 +3,17 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { requireAdmin } from "../../lib/adminSession";
-import { COLORS, FONT } from "../../lib/theme";
+import { COLORS } from "../../lib/theme";
 
 const fmtData = (iso) =>
   iso ? new Date(iso).toLocaleDateString("pt-BR") : "-";
 
 function statusLista(l) {
-  if (!l.ativo) return { label: "Inativa", color: COLORS.muted, bg: COLORS.stockOutBg };
+  if (!l.ativo) return { label: "Inativa", color: COLORS.muted, bg: "#f3f4f6" };
   if (l.vencimento && new Date(l.vencimento) < new Date().setHours(0, 0, 0, 0)) {
-    return { label: "Vencida", color: COLORS.danger, bg: COLORS.dangerSoft };
+    return { label: "Vencida", color: COLORS.danger, bg: "#fee2e2" };
   }
-  return { label: "Ativa", color: COLORS.success, bg: COLORS.successSoft };
+  return { label: "Ativa", color: COLORS.stockOk, bg: COLORS.stockOkBg };
 }
 
 export default function AdminDashboard({ baseUrl }) {
@@ -65,12 +65,9 @@ export default function AdminDashboard({ baseUrl }) {
   return (
     <div style={styles.page}>
       <header style={styles.header}>
-        <div>
-          <p style={styles.brand}>MIC · PAINEL</p>
-          <h1 style={styles.title}>Listas de preço</h1>
-        </div>
+        <h1 style={styles.title}>Listas de preço</h1>
         <div style={{ display: "flex", gap: 10 }}>
-          <Link href="/admin/nova-lista" style={styles.ctaButton}>
+          <Link href="/admin/nova-lista" style={styles.buttonLink}>
             + Nova lista
           </Link>
           <button onClick={handleLogout} style={styles.logoutButton}>
@@ -224,42 +221,33 @@ const styles = {
     minHeight: "100vh",
     background: COLORS.bg,
     color: COLORS.text,
-    fontFamily: FONT,
+    fontFamily: "system-ui, sans-serif",
     padding: "32px 24px 60px",
   },
   header: {
     maxWidth: 1100,
     margin: "0 auto 24px",
     display: "flex",
-    alignItems: "flex-start",
+    alignItems: "center",
     justifyContent: "space-between",
-    borderBottom: `1px solid ${COLORS.border}`,
-    paddingBottom: 20,
+    borderBottom: `3px solid ${COLORS.accent}`,
+    paddingBottom: 16,
   },
-  brand: {
-    margin: "0 0 4px",
-    fontSize: 12,
-    fontWeight: 800,
-    letterSpacing: 3,
-    color: COLORS.accent,
-    textTransform: "uppercase",
-  },
-  title: { margin: 0, fontSize: 26, fontWeight: 700 },
-  ctaButton: {
+  title: { margin: 0, fontSize: 24 },
+  buttonLink: {
     background: COLORS.accent,
     color: "#fff",
-    padding: "10px 18px",
-    borderRadius: 8,
+    padding: "8px 14px",
+    borderRadius: 6,
     textDecoration: "none",
     fontSize: 14,
-    fontWeight: 700,
+    fontWeight: 600,
   },
   logoutButton: {
     background: "transparent",
     border: `1px solid ${COLORS.border}`,
-    color: COLORS.textDim,
-    borderRadius: 8,
-    padding: "10px 16px",
+    borderRadius: 6,
+    padding: "8px 14px",
     fontSize: 14,
     cursor: "pointer",
   },
@@ -271,13 +259,10 @@ const styles = {
     gap: 10,
   },
   filterInput: {
-    padding: "11px 14px",
+    padding: "10px 14px",
     borderRadius: 8,
     border: `1px solid ${COLORS.border}`,
-    background: COLORS.bgAlt,
-    color: COLORS.text,
     fontSize: 14,
-    outline: "none",
   },
   dateRow: { display: "flex", gap: 14, alignItems: "flex-end", flexWrap: "wrap" },
   dateLabel: {
@@ -291,8 +276,6 @@ const styles = {
     padding: "9px 10px",
     borderRadius: 8,
     border: `1px solid ${COLORS.border}`,
-    background: COLORS.bgAlt,
-    color: COLORS.text,
     fontSize: 13,
   },
   clearButton: {
@@ -307,48 +290,43 @@ const styles = {
     maxWidth: 1100,
     margin: "0 auto",
     overflowX: "auto",
-    background: COLORS.bgCard,
-    border: `1px solid ${COLORS.border}`,
-    borderRadius: 12,
   },
   table: { width: "100%", borderCollapse: "collapse" },
   th: {
     textAlign: "left",
-    fontSize: 11,
-    letterSpacing: 1,
-    textTransform: "uppercase",
+    fontSize: 12,
     color: COLORS.muted,
     borderBottom: `1px solid ${COLORS.border}`,
-    padding: "14px 16px",
+    padding: "8px 10px",
   },
-  tr: { borderBottom: `1px solid ${COLORS.borderSoft}` },
-  td: { padding: "14px 16px", fontSize: 14, verticalAlign: "middle" },
+  tr: { borderBottom: `1px solid ${COLORS.border}` },
+  td: { padding: "10px", fontSize: 14, verticalAlign: "middle" },
   pill: {
     display: "inline-block",
     fontSize: 12,
     fontWeight: 700,
-    padding: "4px 12px",
+    padding: "3px 10px",
     borderRadius: 999,
   },
-  actions: { display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" },
+  actions: { display: "flex", gap: 6, justifyContent: "flex-end", flexWrap: "wrap" },
   actionButtonGhost: {
-    padding: "7px 12px",
-    borderRadius: 7,
+    padding: "6px 10px",
+    borderRadius: 6,
     border: `1px solid ${COLORS.border}`,
     background: "transparent",
-    color: COLORS.textDim,
-    fontSize: 13,
+    color: COLORS.text,
+    fontSize: 12,
     fontWeight: 600,
     textDecoration: "none",
     cursor: "pointer",
   },
   actionButtonDanger: {
-    padding: "7px 12px",
-    borderRadius: 7,
-    border: `1px solid ${COLORS.dangerSoft}`,
-    background: COLORS.dangerSoft,
+    padding: "6px 10px",
+    borderRadius: 6,
+    border: `1px solid ${COLORS.danger}`,
+    background: "transparent",
     color: COLORS.danger,
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: 600,
     cursor: "pointer",
   },
