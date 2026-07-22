@@ -63,18 +63,31 @@ export default async function handler(req, res) {
   }
 
   if (req.method === "GET") {
-    const { data, error } = await supabaseAdmin
-      .from("price_lists")
-      .select("id, slug, created_at, ativo, client:client_id ( id, nome )")
-      .order("created_at", { ascending: false })
-      .limit(100);
+    const { cliente, data_inicio, data_fim } = req.query;
 
+    let query = supabaseAdmin
+      .from("price_lists")
+      .select("id, slug, created_at, vencimento, ativo, client:client_id ( id, nome )")
+      .order("created_at", { ascending: false });
+
+    if (data_inicio) query = query.gte("created_at", `${data_inicio}T00:00:00`);
+    if (data_fim) query = query.lte("created_at", `${data_fim}T23:59:59`);
+
+    const { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
-    return res.status(200).json({ lists: data || [] });
+
+    // Filtro por nome de cliente é aplicado aqui (mais simples que fazer
+    // um "or" dentro de um relacionamento aninhado no PostgREST).
+    const termo = String(cliente || "").trim().toLowerCase();
+    const lists = termo
+      ? (data || []).filter((l) => l.client?.nome?.toLowerCase().includes(termo))
+      : data || [];
+
+    return res.status(200).json({ lists });
   }
 
   if (req.method === "POST") {
-    const { bling_customer, items } = req.body || {};
+    const { bling_customer, items, vencimento } = req.body || {};
 
     if (!bling_customer?.bling_id || !bling_customer?.nome) {
       return res.status(400).json({ error: "Cliente é obrigatório." });
@@ -94,7 +107,12 @@ export default async function handler(req, res) {
 
       const { data: priceList, error: listError } = await supabaseAdmin
         .from("price_lists")
-        .insert({ client_id: client.id, slug, ativo: true })
+        .insert({
+          client_id: client.id,
+          slug,
+          ativo: true,
+          vencimento: vencimento || null,
+        })
         .select("id, slug")
         .single();
 

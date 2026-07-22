@@ -1,7 +1,7 @@
 // pages/admin/login.js
 import { useState } from "react";
 import { useRouter } from "next/router";
-import { COLORS } from "../../lib/theme";
+import { COLORS, FONT } from "../../lib/theme";
 
 export default function AdminLogin() {
   const router = useRouter();
@@ -33,7 +33,9 @@ export default function AdminLogin() {
 
   return (
     <div style={styles.page}>
+      <div style={styles.glow} />
       <form onSubmit={handleSubmit} style={styles.card}>
+        <p style={styles.brand}>MIC · PAINEL</p>
         <h1 style={styles.title}>Área administrativa</h1>
         <input
           type="password"
@@ -59,40 +61,61 @@ const styles = {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    fontFamily: "system-ui, sans-serif",
+    fontFamily: FONT,
+    position: "relative",
+    overflow: "hidden",
+  },
+  glow: {
+    position: "absolute",
+    width: 500,
+    height: 500,
+    borderRadius: "50%",
+    background: COLORS.accentSoft,
+    filter: "blur(80px)",
+    top: "-10%",
+    left: "50%",
+    transform: "translateX(-50%)",
   },
   card: {
-    width: 320,
+    position: "relative",
+    width: 340,
     display: "flex",
     flexDirection: "column",
-    gap: 12,
-    padding: 28,
+    gap: 14,
+    padding: 32,
+    background: COLORS.bgCard,
     border: `1px solid ${COLORS.border}`,
-    borderRadius: 10,
+    borderRadius: 16,
+    boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
   },
-  title: {
-    margin: "0 0 8px",
-    fontSize: 20,
-    color: COLORS.text,
+  brand: {
+    margin: 0,
+    fontSize: 12,
+    fontWeight: 800,
+    letterSpacing: 3,
+    color: COLORS.accent,
+    textTransform: "uppercase",
   },
+  title: { margin: "0 0 8px", fontSize: 22, fontWeight: 700, color: COLORS.text },
   input: {
-    padding: "10px 12px",
-    borderRadius: 6,
+    padding: "12px 14px",
+    borderRadius: 10,
     border: `1px solid ${COLORS.border}`,
+    background: COLORS.bgAlt,
+    color: COLORS.text,
     fontSize: 15,
+    outline: "none",
   },
   button: {
-    padding: "10px 12px",
-    borderRadius: 6,
+    padding: "12px 14px",
+    borderRadius: 10,
     border: "none",
     background: COLORS.accent,
     color: "#fff",
-    fontWeight: 600,
+    fontWeight: 700,
+    fontSize: 15,
     cursor: "pointer",
+    letterSpacing: 0.3,
   },
-  erro: {
-    color: COLORS.danger,
-    fontSize: 13,
-    margin: 0,
-  },
+  erro: { color: COLORS.danger, fontSize: 13, margin: 0 },
 };
