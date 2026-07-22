@@ -1,10 +1,14 @@
 // scripts/sync-bling.js
 // Executado pelo GitHub Actions a cada 5 minutos.
-// 1. Lê o token atual do Supabase
-// 2. Renova o access_token se estiver perto de expirar (usando o refresh_token)
-// 3. Busca a lista de produtos no Bling (paginado)
-// 4. Para cada produto, busca o detalhe (custo, estoque, imagem)
-// 5. Faz upsert na tabela public.products do Supabase
+// 1. Lê o token atual do Supabase (renova se necessário)
+// 2. Sincroniza os CLIENTES (contatos) do Bling -> public.bling_customers
+// 3. Sincroniza os PRODUTOS do Bling, tratando produtos com variação
+//    (ex: um "produto pai" tipo camisa, com uma variação por tamanho):
+//      - public.product_groups  -> 1 linha por produto (o "pai" ou o
+//        produto simples), com nome/imagem/preço/custo consolidados
+//      - public.products        -> continua 1 linha por variação
+//        vendável, agora ligada ao grupo via group_id e com o
+//        tamanho em products.tamanho
 
 const { createClient } = require("@supabase/supabase-js");
 
@@ -32,12 +36,10 @@ async function getValidAccessToken() {
   const now = Date.now();
   const fiveMinutes = 5 * 60 * 1000;
 
-  // Se o token ainda é válido por mais de 5 minutos, usa ele direto
   if (expiresAt - now > fiveMinutes) {
     return tokenRow.access_token;
   }
 
-  // Caso contrário, renova usando o refresh_token
   console.log("Access token expirando, renovando com o refresh_token...");
 
   const basicAuth = Buffer.from(
@@ -69,7 +71,7 @@ async function getValidAccessToken() {
     .from("bling_tokens")
     .update({
       access_token: data.access_token,
-      refresh_token: data.refresh_token, // o Bling costuma rotacionar o refresh_token também
+      refresh_token: data.refresh_token,
       expires_at: newExpiresAt,
       updated_at: new Date().toISOString(),
     })
@@ -91,7 +93,6 @@ async function blingFetch(path, accessToken) {
   });
 
   if (resp.status === 429) {
-    // Limite de requisições por segundo do Bling atingido: espera e tenta de novo
     console.log("Rate limit do Bling atingido, aguardando 2s...");
     await new Promise((r) => setTimeout(r, 2000));
     return blingFetch(path, accessToken);
@@ -104,7 +105,79 @@ async function blingFetch(path, accessToken) {
   return data;
 }
 
-// Lista todos os produtos (paginado, 100 por página é o máximo permitido pela API)
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ================================================================
+// CLIENTES (contatos) do Bling
+// ================================================================
+
+async function listAllCustomers(accessToken) {
+  let pagina = 1;
+  const limite = 100;
+  let all = [];
+
+  while (true) {
+    const data = await blingFetch(
+      `/contatos?pagina=${pagina}&limite=${limite}`,
+      accessToken
+    );
+    const items = data.data || [];
+    all = all.concat(items);
+
+    if (items.length < limite) break;
+    pagina += 1;
+    await sleep(300);
+  }
+
+  return all;
+}
+
+// IMPORTANTE: confira no seu console.log de teste os nomes exatos dos
+// campos retornados pela sua conta (ex: pode vir "numeroDocumento" ou
+// dentro de um objeto "documento"). Ajuste extractDocumento/extractEmail
+// se necessário -- a lista de /contatos costuma vir mais enxuta que o
+// detalhe de /contatos/{id}.
+function extractDocumento(c) {
+  return c?.numeroDocumento ?? c?.documento ?? null;
+}
+
+async function syncCustomers(accessToken) {
+  console.log("Buscando clientes (contatos) no Bling...");
+  const customers = await listAllCustomers(accessToken);
+  console.log(`Encontrados ${customers.length} contatos.`);
+
+  let synced = 0;
+  for (const c of customers) {
+    const row = {
+      bling_id: c.id,
+      nome: c.nome ?? null,
+      documento: extractDocumento(c),
+      email: c.email ?? null,
+      telefone: c.telefone ?? c.celular ?? null,
+      situacao: c.situacao ?? null,
+      raw_data: c,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { error } = await supabase
+      .from("bling_customers")
+      .upsert(row, { onConflict: "bling_id" });
+
+    if (error) {
+      console.error(`Erro ao salvar contato ${c.id}:`, error.message);
+    } else {
+      synced += 1;
+    }
+  }
+
+  console.log(`Clientes sincronizados: ${synced}.`);
+  return synced;
+}
+
+// ================================================================
+// PRODUTOS (com suporte a variações / tamanhos)
+// ================================================================
+
 async function listAllProducts(accessToken) {
   let pagina = 1;
   const limite = 100;
@@ -118,32 +191,24 @@ async function listAllProducts(accessToken) {
     const items = data.data || [];
     allProducts = allProducts.concat(items);
 
-    if (items.length < limite) break; // última página
+    if (items.length < limite) break;
     pagina += 1;
-
-    // pequena pausa para não estourar o rate limit
-    await new Promise((r) => setTimeout(r, 350));
+    await sleep(350);
   }
 
   return allProducts;
 }
 
-// Busca o detalhe de um produto específico (custo, estoque, imagem)
-// IMPORTANTE: confira no seu próprio teste (ex: no console.log abaixo) os nomes
-// exatos dos campos retornados pela sua conta/plano do Bling, pois alguns
-// campos (fornecedor/custo, mídia) podem variar conforme o módulo contratado.
 async function getProductDetail(id, accessToken) {
   const data = await blingFetch(`/produtos/${id}`, accessToken);
   return data.data;
 }
 
 function extractCost(detail) {
-  // Caminho mais comum no retorno da v3: fornecedor.precoCusto
   return detail?.fornecedor?.precoCusto ?? detail?.precoCusto ?? null;
 }
 
 function extractStock(detail) {
-  // Estoque "saldo virtual total" costuma vir em estoque.saldoVirtualTotal
   return (
     detail?.estoque?.saldoVirtualTotal ??
     detail?.estoque?.saldoFisicoTotal ??
@@ -158,6 +223,146 @@ function extractImage(detail) {
   return null;
 }
 
+// Um produto "pai" (com variações) normalmente traz um array
+// "variacoes" no GET /produtos/{id}. Cada filho, por sua vez, traz
+// "produtoPai": { "id": <id do pai> }.
+// IMPORTANTE: confira esses dois campos no seu primeiro sync (dá pra
+// rodar `node scripts/sync-bling.js` local com um console.log(detail)
+// solto aqui embaixo) -- o nome exato pode variar conforme o plano/
+// versão da conta Bling. Se vier diferente, ajuste as 3 funções abaixo.
+function extractParentId(detail) {
+  return detail?.produtoPai?.id ?? null;
+}
+
+function isParentProduct(detail) {
+  return Array.isArray(detail?.variacoes) && detail.variacoes.length > 0;
+}
+
+// Nome do tamanho/variação. Tenta o campo estruturado primeiro; se não
+// existir, tenta separar do nome completo (ex: "Camisa Time X - P" -> "P").
+function extractSizeName(detail) {
+  if (detail?.variacao?.nome) return detail.variacao.nome;
+  if (Array.isArray(detail?.variacao?.atributos) && detail.variacao.atributos.length) {
+    // ex: [{ nome: "Tamanho", valor: "P" }]
+    const tamanhoAttr = detail.variacao.atributos.find((a) =>
+      String(a?.nome || "").toLowerCase().includes("tamanho")
+    );
+    if (tamanhoAttr?.valor) return tamanhoAttr.valor;
+    return detail.variacao.atributos.map((a) => a.valor).join(" / ");
+  }
+  if (detail?.nome?.includes(" - ")) {
+    return detail.nome.split(" - ").pop().trim();
+  }
+  return null;
+}
+
+async function upsertGroup(row) {
+  const { data, error } = await supabase
+    .from("product_groups")
+    .upsert(row, { onConflict: "bling_group_id" })
+    .select("id")
+    .single();
+
+  if (error) throw new Error(`Erro ao salvar grupo ${row.bling_group_id}: ${error.message}`);
+  return data.id;
+}
+
+async function syncProducts(accessToken) {
+  console.log("Buscando lista de produtos...");
+  const products = await listAllProducts(accessToken);
+  console.log(`Encontrados ${products.length} produtos. Buscando detalhes...`);
+
+  const details = [];
+  for (const p of products) {
+    const detail = await getProductDetail(p.id, accessToken);
+    details.push(detail);
+    await sleep(350);
+  }
+
+  const now = new Date().toISOString();
+  const groupIdByBlingGroupId = new Map();
+
+  // Passo 1: grava os grupos (produtos pai + produtos simples sem variação)
+  for (const detail of details) {
+    if (extractParentId(detail)) continue; // é filho, trata no passo 2
+
+    const groupId = await upsertGroup({
+      bling_group_id: detail.id,
+      nome: detail.nome ?? null,
+      codigo: detail.codigo ?? null,
+      imagem_url: extractImage(detail),
+      preco_venda: detail.preco ?? null,
+      preco_custo: extractCost(detail),
+      situacao: detail.situacao ?? null,
+      updated_at: now,
+    });
+    groupIdByBlingGroupId.set(detail.id, groupId);
+  }
+
+  // Passo 2: grava as variações (e produtos simples) na tabela products,
+  // já ligadas ao grupo certo.
+  let syncedCount = 0;
+  for (const detail of details) {
+    const parentId = extractParentId(detail);
+
+    let groupId;
+    let tamanho = null;
+
+    if (parentId) {
+      groupId = groupIdByBlingGroupId.get(parentId);
+      if (!groupId) {
+        // O produto pai não veio na mesma sincronização (raro). Cria um
+        // grupo mínimo agora; ele é completado no próximo sync quando o
+        // pai for processado.
+        groupId = await upsertGroup({
+          bling_group_id: parentId,
+          nome: detail.nome?.split(" - ")[0] || detail.nome,
+          updated_at: now,
+        });
+        groupIdByBlingGroupId.set(parentId, groupId);
+      }
+      tamanho = extractSizeName(detail);
+    } else if (isParentProduct(detail)) {
+      // é o próprio "pai": não é vendável diretamente, só serve de
+      // cabeçalho do grupo (já salvo no passo 1). Não cria linha em
+      // products para ele.
+      continue;
+    } else {
+      // produto simples, sem variação de tamanho
+      groupId = groupIdByBlingGroupId.get(detail.id);
+    }
+
+    const row = {
+      bling_id: detail.id,
+      bling_parent_id: parentId,
+      group_id: groupId,
+      codigo: detail.codigo ?? null,
+      nome: detail.nome ?? null,
+      preco_venda: detail.preco ?? null,
+      preco_custo: extractCost(detail),
+      estoque: extractStock(detail),
+      situacao: detail.situacao ?? null,
+      imagem_url: extractImage(detail),
+      tamanho,
+      raw_data: detail,
+      updated_at: now,
+    };
+
+    const { error } = await supabase
+      .from("products")
+      .upsert(row, { onConflict: "bling_id" });
+
+    if (error) {
+      console.error(`Erro ao salvar produto ${detail.id}:`, error.message);
+    } else {
+      syncedCount += 1;
+    }
+  }
+
+  console.log(`Produtos sincronizados: ${syncedCount}.`);
+  return syncedCount;
+}
+
 async function main() {
   const startedAt = new Date().toISOString();
   let syncedCount = 0;
@@ -165,39 +370,9 @@ async function main() {
   try {
     const accessToken = await getValidAccessToken();
 
-    console.log("Buscando lista de produtos...");
-    const products = await listAllProducts(accessToken);
-    console.log(`Encontrados ${products.length} produtos. Buscando detalhes...`);
-
-    for (const p of products) {
-      const detail = await getProductDetail(p.id, accessToken);
-
-      const row = {
-        bling_id: detail.id,
-        codigo: detail.codigo ?? null,
-        nome: detail.nome ?? null,
-        preco_venda: detail.preco ?? null,
-        preco_custo: extractCost(detail),
-        estoque: extractStock(detail),
-        situacao: detail.situacao ?? null,
-        imagem_url: extractImage(detail),
-        raw_data: detail,
-        updated_at: new Date().toISOString(),
-      };
-
-      const { error } = await supabase
-        .from("products")
-        .upsert(row, { onConflict: "bling_id" });
-
-      if (error) {
-        console.error(`Erro ao salvar produto ${detail.id}:`, error.message);
-      } else {
-        syncedCount += 1;
-      }
-
-      // pequena pausa entre chamadas de detalhe para respeitar o rate limit
-      await new Promise((r) => setTimeout(r, 350));
-    }
+    const customersSynced = await syncCustomers(accessToken);
+    const productsSynced = await syncProducts(accessToken);
+    syncedCount = customersSynced + productsSynced;
 
     await supabase.from("sync_logs").insert({
       started_at: startedAt,
@@ -206,7 +381,9 @@ async function main() {
       products_synced: syncedCount,
     });
 
-    console.log(`Sincronização concluída: ${syncedCount} produtos atualizados.`);
+    console.log(
+      `Sincronização concluída: ${customersSynced} clientes, ${productsSynced} produtos.`
+    );
   } catch (err) {
     console.error("Erro na sincronização:", err);
     await supabase.from("sync_logs").insert({

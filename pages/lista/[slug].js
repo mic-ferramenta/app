@@ -1,9 +1,8 @@
 // pages/lista/[slug].js
 //
-// Página renderizada no SERVIDOR (getServerSideProps). O navegador do
-// cliente recebe só o HTML pronto -- nunca tem acesso à service_role key
-// nem consegue consultar o Supabase diretamente. Cada slug só enxerga
-// os itens ligados ao client_id daquele slug.
+// Página pública, renderizada no servidor. O slug agora pertence à
+// LISTA (price_lists), não ao cliente -- então um mesmo cliente pode
+// ter várias listas, cada uma com seu próprio link.
 
 import { supabaseAdmin } from "../../lib/supabaseAdmin";
 
@@ -19,23 +18,39 @@ export default function ListaDePrecos({ cliente, itens }) {
         {itens.map((item) => (
           <div key={item.id} style={styles.card}>
             <div style={styles.imageWrap}>
-              {item.produto.imagem_url ? (
+              {item.imagem_url ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={item.produto.imagem_url}
-                  alt={item.produto.nome}
-                  style={styles.image}
-                />
+                <img src={item.imagem_url} alt={item.nome} style={styles.image} />
               ) : (
                 <div style={styles.imagePlaceholder}>sem imagem</div>
               )}
             </div>
 
             <div style={styles.cardBody}>
-              <h2 style={styles.productName}>{item.produto.nome}</h2>
-              {item.produto.tamanho && (
-                <span style={styles.badge}>Tamanho: {item.produto.tamanho}</span>
-              )}
+              <h2 style={styles.productName}>{item.nome}</h2>
+
+              <div style={styles.tamanhos}>
+                {item.variacoes.length === 0 && (
+                  <span style={styles.semTamanho}>tamanho único</span>
+                )}
+                {item.variacoes.map((v) => {
+                  const comEstoque = Number(v.estoque) > 0;
+                  return (
+                    <span
+                      key={v.id}
+                      style={{
+                        ...styles.badge,
+                        color: comEstoque ? AZUL : "#9ca3af",
+                        borderColor: comEstoque ? AZUL : "#e5e5e5",
+                        background: comEstoque ? "#eef2ff" : "#f5f5f5",
+                      }}
+                    >
+                      {v.tamanho || "Único"}
+                    </span>
+                  );
+                })}
+              </div>
+
               <p style={styles.price}>
                 {Number(item.preco).toLocaleString("pt-BR", {
                   style: "currency",
@@ -57,35 +72,38 @@ export default function ListaDePrecos({ cliente, itens }) {
 export async function getServerSideProps({ params }) {
   const { slug } = params;
 
-  const { data: cliente } = await supabaseAdmin
-    .from("clients")
-    .select("id, nome, ativo")
+  const { data: lista } = await supabaseAdmin
+    .from("price_lists")
+    .select("id, ativo, client:client_id ( nome )")
     .eq("slug", slug)
     .eq("ativo", true)
     .single();
 
-  // slug inválido, inexistente ou cliente inativo -> 404 genérico
-  // (não revela se o slug existe ou não, nem se está só inativo)
-  if (!cliente) {
+  // slug inválido, inexistente ou lista inativa -> 404 genérico
+  if (!lista) {
     return { notFound: true };
   }
 
   const { data: itensRaw } = await supabaseAdmin
     .from("price_list_items")
     .select(
-      "id, preco, ordem, produto:product_id ( id, nome, imagem_url, tamanho )"
+      "id, preco, ordem, grupo:group_id ( id, nome, imagem_url, variacoes:products ( id, tamanho, estoque ) )"
     )
-    .eq("client_id", cliente.id)
+    .eq("price_list_id", lista.id)
     .order("ordem", { ascending: true });
 
-  const itens = (itensRaw || []).map((i) => ({
-    id: i.id,
-    preco: i.preco,
-    produto: i.produto,
-  }));
+  const itens = (itensRaw || [])
+    .filter((i) => i.grupo)
+    .map((i) => ({
+      id: i.id,
+      preco: i.preco,
+      nome: i.grupo.nome,
+      imagem_url: i.grupo.imagem_url,
+      variacoes: i.grupo.variacoes || [],
+    }));
 
   return {
-    props: { cliente: { nome: cliente.nome }, itens },
+    props: { cliente: { nome: lista.client.nome }, itens },
   };
 }
 
@@ -156,7 +174,7 @@ const styles = {
     padding: 14,
     display: "flex",
     flexDirection: "column",
-    gap: 6,
+    gap: 8,
   },
   productName: {
     margin: 0,
@@ -164,11 +182,13 @@ const styles = {
     fontWeight: 600,
     color: "#000000",
   },
+  tamanhos: { display: "flex", flexWrap: "wrap", gap: 6 },
+  semTamanho: { fontSize: 12, color: "#666" },
   badge: {
     display: "inline-block",
     fontSize: 12,
-    color: AZUL,
-    border: `1px solid ${AZUL}`,
+    fontWeight: 600,
+    border: "1px solid",
     borderRadius: 999,
     padding: "2px 10px",
     width: "fit-content",

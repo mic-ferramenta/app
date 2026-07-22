@@ -5,7 +5,7 @@ import { requireAdmin } from "../../lib/adminSession";
 import { supabaseAdmin } from "../../lib/supabaseAdmin";
 import { COLORS } from "../../lib/theme";
 
-export default function AdminDashboard({ clients, baseUrl }) {
+export default function AdminDashboard({ lists, baseUrl }) {
   const router = useRouter();
 
   async function handleLogout() {
@@ -16,10 +16,10 @@ export default function AdminDashboard({ clients, baseUrl }) {
   return (
     <div style={styles.page}>
       <header style={styles.header}>
-        <h1 style={styles.title}>Clientes</h1>
+        <h1 style={styles.title}>Listas de preço</h1>
         <div style={{ display: "flex", gap: 10 }}>
-          <Link href="/admin/clients/new" style={styles.buttonLink}>
-            + Novo cliente
+          <Link href="/admin/nova-lista" style={styles.buttonLink}>
+            + Nova lista
           </Link>
           <button onClick={handleLogout} style={styles.logoutButton}>
             Sair
@@ -28,18 +28,18 @@ export default function AdminDashboard({ clients, baseUrl }) {
       </header>
 
       <main style={styles.list}>
-        {clients.length === 0 && (
-          <p style={{ color: COLORS.muted }}>Nenhum cliente cadastrado ainda.</p>
+        {lists.length === 0 && (
+          <p style={{ color: COLORS.muted }}>Nenhuma lista gerada ainda.</p>
         )}
 
-        {clients.map((c) => (
-          <div key={c.id} style={styles.row}>
+        {lists.map((l) => (
+          <div key={l.id} style={styles.row}>
             <div>
-              <p style={styles.rowName}>{c.nome}</p>
-              <p style={styles.rowLink}>{`${baseUrl}/lista/${c.slug}`}</p>
+              <p style={styles.rowName}>{l.client?.nome}</p>
+              <p style={styles.rowLink}>{`${baseUrl}/lista/${l.slug}`}</p>
             </div>
-            <Link href={`/admin/clients/${c.id}`} style={styles.manageLink}>
-              Gerenciar lista →
+            <Link href={`/admin/lists/${l.id}`} style={styles.manageLink}>
+              Gerenciar →
             </Link>
           </div>
         ))}
@@ -53,15 +53,15 @@ export async function getServerSideProps({ req }) {
     return { redirect: { destination: "/admin/login", permanent: false } };
   }
 
-  const { data: clients } = await supabaseAdmin
-    .from("clients")
-    .select("id, nome, slug")
+  const { data: lists } = await supabaseAdmin
+    .from("price_lists")
+    .select("id, slug, created_at, client:client_id ( nome )")
     .order("created_at", { ascending: false });
 
   const proto = req.headers["x-forwarded-proto"] || "https";
   const baseUrl = `${proto}://${req.headers.host}`;
 
-  return { props: { clients: clients || [], baseUrl } };
+  return { props: { lists: lists || [], baseUrl } };
 }
 
 const styles = {
