@@ -232,12 +232,12 @@ function extractImage(detail) {
 }
 
 // Um produto "pai" (com variações) normalmente traz um array
-// "variacoes" no GET /produtos/{id}. Cada filho, por sua vez, traz
-// "produtoPai": { "id": <id do pai> }.
-// IMPORTANTE: confira esses dois campos no seu primeiro sync (dá pra
-// rodar `node scripts/sync-bling.js` local com um console.log(detail)
-// solto aqui embaixo) -- o nome exato pode variar conforme o plano/
-// versão da conta Bling. Se vier diferente, ajuste as 3 funções abaixo.
+// "variacoes" no GET /produtos/{id}, e cada filho traria
+// "produtoPai": { "id": <id do pai> }. Na prática, contas como a sua
+// não retornam esse vínculo -- o tamanho vem embutido no próprio nome
+// (ex: "Camisa Brasil Feminina Azul II 26/27 Tamanho:3GG"). Por isso a
+// separação por nome (splitNomeTamanho) é o mecanismo principal; o
+// produtoPai/variacoes só é usado quando presente, como bônus.
 function extractParentId(detail) {
   return detail?.produtoPai?.id ?? null;
 }
@@ -246,32 +246,38 @@ function isParentProduct(detail) {
   return Array.isArray(detail?.variacoes) && detail.variacoes.length > 0;
 }
 
-// Nome do tamanho/variação. Tenta o campo estruturado primeiro; se não
-// existir, tenta separar do nome completo (ex: "Camisa Time X - P" -> "P").
-function extractSizeName(detail) {
-  if (detail?.variacao?.nome) return detail.variacao.nome;
-  if (Array.isArray(detail?.variacao?.atributos) && detail.variacao.atributos.length) {
-    // ex: [{ nome: "Tamanho", valor: "P" }]
-    const tamanhoAttr = detail.variacao.atributos.find((a) =>
-      String(a?.nome || "").toLowerCase().includes("tamanho")
-    );
-    if (tamanhoAttr?.valor) return tamanhoAttr.valor;
-    return detail.variacao.atributos.map((a) => a.valor).join(" / ");
+// Separa "Nome do produto Tamanho:XX" em { base: "Nome do produto", tamanho: "XX" }.
+// Se não achar o padrão "Tamanho:", devolve o nome inteiro como base e
+// tamanho null (produto sem variação de tamanho).
+function splitNomeTamanho(nomeCompleto) {
+  const nome = String(nomeCompleto || "");
+  const match = nome.match(/^(.*?)\s*Tamanho\s*:\s*(\S+)\s*$/i);
+  if (match) {
+    return { base: match[1].trim(), tamanho: match[2].trim() };
   }
-  if (detail?.nome?.includes(" - ")) {
-    return detail.nome.split(" - ").pop().trim();
-  }
-  return null;
+  return { base: nome.trim(), tamanho: null };
+}
+
+// Normaliza o nome-base pra virar chave de agrupamento (ignora acento,
+// caixa e espaços duplicados) -- assim variações do mesmo produto caem
+// sempre no mesmo grupo mesmo com pequenas diferenças de digitação.
+function chaveGrupoPorNome(baseNome) {
+  return String(baseNome || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 async function upsertGroup(row) {
   const { data, error } = await supabase
     .from("product_groups")
-    .upsert(row, { onConflict: "bling_group_id" })
+    .upsert(row, { onConflict: "chave_grupo" })
     .select("id")
     .single();
 
-  if (error) throw new Error(`Erro ao salvar grupo ${row.bling_group_id}: ${error.message}`);
+  if (error) throw new Error(`Erro ao salvar grupo ${row.chave_grupo}: ${error.message}`);
   return data.id;
 }
 
@@ -288,13 +294,22 @@ async function syncProducts(accessToken) {
   }
 
   const now = new Date().toISOString();
-  const groupIdByBlingGroupId = new Map();
+  const groupIdByKey = new Map();
 
-  // Passo 1: grava os grupos (produtos pai + produtos simples sem variação)
+  async function getOrCreateGroupId(key, groupRow) {
+    if (groupIdByKey.has(key)) return groupIdByKey.get(key);
+    const id = await upsertGroup({ chave_grupo: key, ...groupRow });
+    groupIdByKey.set(key, id);
+    return id;
+  }
+
+  // Passo 1: grupos "pai" reais do Bling, quando o campo existir
+  // (fica como bônus -- na sua conta isso normalmente não acontece).
   for (const detail of details) {
-    if (extractParentId(detail)) continue; // é filho, trata no passo 2
+    if (extractParentId(detail)) continue;
+    if (!isParentProduct(detail)) continue;
 
-    const groupId = await upsertGroup({
+    await getOrCreateGroupId(`bling-${detail.id}`, {
       bling_group_id: detail.id,
       nome: detail.nome ?? null,
       codigo: detail.codigo ?? null,
@@ -304,41 +319,38 @@ async function syncProducts(accessToken) {
       situacao: detail.situacao ?? null,
       updated_at: now,
     });
-    groupIdByBlingGroupId.set(detail.id, groupId);
   }
 
-  // Passo 2: monta as linhas de variações (e produtos simples), já
-  // ligadas ao grupo certo, e grava tudo de uma vez em lote.
+  // Passo 2: monta as variações. Usa produtoPai quando existe; senão,
+  // agrupa pelo nome-base e tira o tamanho do sufixo "Tamanho:XX".
   const productRows = [];
   for (const detail of details) {
     const parentId = extractParentId(detail);
+    const { base, tamanho: tamanhoDoNome } = splitNomeTamanho(detail.nome);
 
-    let groupId;
-    let tamanho = null;
-
-    if (parentId) {
-      groupId = groupIdByBlingGroupId.get(parentId);
-      if (!groupId) {
-        // O produto pai não veio na mesma sincronização (raro). Cria um
-        // grupo mínimo agora; ele é completado no próximo sync quando o
-        // pai for processado.
-        groupId = await upsertGroup({
-          bling_group_id: parentId,
-          nome: detail.nome?.split(" - ")[0] || detail.nome,
-          updated_at: now,
-        });
-        groupIdByBlingGroupId.set(parentId, groupId);
-      }
-      tamanho = extractSizeName(detail);
-    } else if (isParentProduct(detail)) {
-      // é o próprio "pai": não é vendável diretamente, só serve de
-      // cabeçalho do grupo (já salvo no passo 1). Não cria linha em
-      // products para ele.
+    if (!parentId && isParentProduct(detail)) {
+      // é o próprio "pai": não é vendável diretamente, só cabeçalho do
+      // grupo (já salvo no passo 1). Não cria linha em products.
       continue;
-    } else {
-      // produto simples, sem variação de tamanho
-      groupId = groupIdByBlingGroupId.get(detail.id);
     }
+
+    const key = parentId ? `bling-${parentId}` : `nome-${chaveGrupoPorNome(base)}`;
+    const tamanho = detail?.variacao?.nome || tamanhoDoNome || null;
+
+    if (!groupIdByKey.has(key)) {
+      await getOrCreateGroupId(key, {
+        bling_group_id: parentId || null,
+        nome: base,
+        codigo: detail.codigo ?? null,
+        imagem_url: extractImage(detail),
+        preco_venda: detail.preco ?? null,
+        preco_custo: extractCost(detail),
+        situacao: detail.situacao ?? null,
+        updated_at: now,
+      });
+    }
+
+    const groupId = groupIdByKey.get(key);
 
     productRows.push({
       bling_id: detail.id,
