@@ -107,6 +107,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Upsert em lotes -- muito mais rápido que 1 chamada por linha, e é o
 // que garante que isso não fica lento conforme o catálogo cresce.
+// Qualquer erro derruba a sincronização com uma mensagem clara -- nunca
+// engole o erro silenciosamente (senão você só descobre pelo resultado
+// vazio na tabela, sem saber por quê).
 async function upsertInChunks(table, rows, onConflict, chunkSize = 500) {
   let synced = 0;
   for (let i = 0; i < rows.length; i += chunkSize) {
@@ -116,10 +119,11 @@ async function upsertInChunks(table, rows, onConflict, chunkSize = 500) {
       .upsert(chunk, { onConflict, count: "exact" });
 
     if (error) {
-      console.error(`Erro ao salvar lote em ${table} (linhas ${i}-${i + chunk.length}):`, error.message);
-    } else {
-      synced += count ?? chunk.length;
+      throw new Error(
+        `Erro ao salvar lote em ${table} (linhas ${i}-${i + chunk.length}, onConflict=${onConflict}): ${error.message}`
+      );
     }
+    synced += count ?? chunk.length;
   }
   return synced;
 }
@@ -292,54 +296,53 @@ async function syncProducts(accessToken) {
   }
 
   const now = new Date().toISOString();
-
-  // ------------------------------------------------------------
-  // Passo 1: monta as linhas de produtos_pai (chave -> linha)
-  // ------------------------------------------------------------
   const paisPorChave = new Map();
 
-  function registrarPaiSeNecessario(key, dadosCompletos) {
+  // Usado pra dados vindos de uma variação (parcial/melhor-esforço):
+  // só preenche se o grupo ainda não existe.
+  function registrarPaiSeNecessario(key, dados) {
     if (paisPorChave.has(key)) return;
-    paisPorChave.set(key, { chave_grupo: key, updated_at: now, ...dadosCompletos });
+    paisPorChave.set(key, { chave_grupo: key, updated_at: now, ...dados });
   }
 
-  // 1a) produtos "pai" de verdade, vindos com array variacoes
-  for (const detail of details) {
-    if (extractParentId(detail)) continue; // é filho, tratado no passo 2
-    if (!isParentProduct(detail)) continue; // não é pai puro
-
-    registrarPaiSeNecessario(`bling-${detail.id}`, {
-      bling_id: detail.id,
-      nome: detail.nome ?? null,
-      codigo: detail.codigo ?? null,
-      imagem_url: extractImage(detail),
-      preco_venda: detail.preco ?? null,
-      preco_custo: extractCost(detail),
-      situacao: detail.situacao ?? null,
-    });
+  // Usado pro produto "pai" de verdade (o que tem variacoes[]): os
+  // dados dele são sempre a fonte da verdade, então sobrescreve
+  // qualquer coisa parcial que uma variação já tenha registrado antes.
+  function registrarPaiAutoritativo(key, dados) {
+    paisPorChave.set(key, { chave_grupo: key, updated_at: now, ...dados });
   }
 
-  // ------------------------------------------------------------
-  // Passo 2: monta as linhas de produtos_variacoes, garantindo que
-  // cada uma tenha um pai (criando um mínimo se ainda não existir).
-  // ------------------------------------------------------------
   const variacoesPendentes = [];
 
+  // Passagem única: a chave por NOME é sempre a prioridade (é o que
+  // essa conta usa de fato pra ligar tamanho ao produto). idProdutoPai
+  // só entra como reforço quando não dá pra extrair nada do nome.
   for (const detail of details) {
-    const parentId = extractParentId(detail);
-    if (!parentId && isParentProduct(detail)) continue; // já é o pai, tratado acima
-
     const { base, tamanho: tamanhoDoNome } = splitNomeTamanho(detail.nome);
+
+    if (isParentProduct(detail)) {
+      // é o próprio "pai": não vira linha de variação, só cabeçalho
+      // do grupo -- usa o NOME COMPLETO dele como chave, pra bater
+      // exatamente com a chave que os filhos calculam a partir do
+      // próprio nome (a base, sem o "Tamanho:XX").
+      const key = `nome-${chaveGrupoPorNome(detail.nome)}`;
+      registrarPaiAutoritativo(key, {
+        bling_id: detail.id,
+        nome: detail.nome ?? null,
+        codigo: detail.codigo ?? null,
+        imagem_url: extractImage(detail),
+        preco_venda: detail.preco ?? null,
+        preco_custo: extractCost(detail),
+        situacao: detail.situacao ?? null,
+      });
+      continue;
+    }
+
     let key;
     let tamanho;
 
-    if (parentId) {
-      // variação real, ligada por idProdutoPai
-      key = `bling-${parentId}`;
-      tamanho = detail?.variacao?.nome || tamanhoDoNome || null;
-      registrarPaiSeNecessario(key, { bling_id: parentId, nome: base });
-    } else if (tamanhoDoNome !== null) {
-      // sem vínculo estruturado, mas o nome segue "... Tamanho:XX"
+    if (tamanhoDoNome !== null) {
+      // variação identificada pelo padrão "... Tamanho:XX" no nome
       key = `nome-${chaveGrupoPorNome(base)}`;
       tamanho = tamanhoDoNome;
       registrarPaiSeNecessario(key, {
@@ -351,18 +354,26 @@ async function syncProducts(accessToken) {
         situacao: detail.situacao ?? null,
       });
     } else {
-      // produto totalmente simples, sem nenhuma variação de tamanho
-      key = `bling-${detail.id}`;
-      tamanho = null;
-      registrarPaiSeNecessario(key, {
-        bling_id: detail.id,
-        nome: detail.nome ?? null,
-        codigo: detail.codigo ?? null,
-        imagem_url: extractImage(detail),
-        preco_venda: detail.preco ?? null,
-        preco_custo: extractCost(detail),
-        situacao: detail.situacao ?? null,
-      });
+      const parentId = extractParentId(detail);
+      if (parentId) {
+        // variação real via idProdutoPai (contas que têm esse campo)
+        key = `bling-${parentId}`;
+        tamanho = detail?.variacao?.nome || null;
+        registrarPaiSeNecessario(key, { bling_id: parentId, nome: base });
+      } else {
+        // produto realmente simples, sem nenhum tipo de variação
+        key = `bling-${detail.id}`;
+        tamanho = null;
+        registrarPaiSeNecessario(key, {
+          bling_id: detail.id,
+          nome: detail.nome ?? null,
+          codigo: detail.codigo ?? null,
+          imagem_url: extractImage(detail),
+          preco_venda: detail.preco ?? null,
+          preco_custo: extractCost(detail),
+          situacao: detail.situacao ?? null,
+        });
+      }
     }
 
     variacoesPendentes.push({
@@ -406,6 +417,12 @@ async function syncProducts(accessToken) {
       updated_at: v.updated_at,
     }))
     .filter((v) => v.pai_id); // segurança: nunca deveria faltar
+
+  if (variacaoRows.length < variacoesPendentes.length) {
+    console.warn(
+      `Atenção: ${variacoesPendentes.length - variacaoRows.length} variação(ões) ficaram sem pai_id resolvido e foram descartadas. Isso não deveria acontecer -- revise as chaves de agrupamento.`
+    );
+  }
 
   const syncedCount = await upsertInChunks("produtos_variacoes", variacaoRows, "bling_id");
 
