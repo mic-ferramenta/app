@@ -1,11 +1,20 @@
 // components/ProdutoGrupoCard.js
 //
-// Card consolidado de um produto: nome/imagem na parte de cima e,
-// embaixo, um badge por tamanho -- verde se tem estoque, cinza se não
-// tem. Usado tanto na tela de seleção de produtos do admin (com
-// checkbox) quanto na lista pública do cliente (sem checkbox).
+// Card consolidado de um produto: nome/imagem em cima e, embaixo, um
+// badge por tamanho -- verde se tem estoque, cinza se não tem. Clicar
+// no corpo do card expande uma tabelinha com o estoque exato por
+// tamanho. O checkbox (quando existe) seleciona o produto pra lista e
+// não conflita com o clique de expandir (para propagação do evento).
 
+import { useState } from "react";
 import { COLORS } from "../lib/theme";
+
+// Blindagem: tira um eventual prefixo "Tamanho:" que tenha vindo cru do
+// Bling, não importa a caixa ou os espaços ao redor.
+function limparTamanho(v) {
+  if (!v) return v;
+  return String(v).replace(/^\s*tamanho\s*:\s*/i, "").trim();
+}
 
 export default function ProdutoGrupoCard({
   grupo,
@@ -13,18 +22,21 @@ export default function ProdutoGrupoCard({
   onToggle,
   rightSlot,
 }) {
+  const [expandido, setExpandido] = useState(false);
   const clicavel = typeof onToggle === "function";
+  const variacoes = grupo.variacoes || [];
 
   return (
     <div
       style={{
         ...styles.card,
         borderColor: selecionado ? COLORS.accent : COLORS.border,
-        cursor: clicavel ? "pointer" : "default",
       }}
-      onClick={clicavel ? () => onToggle(grupo) : undefined}
     >
-      <div style={styles.top}>
+      <div
+        style={{ ...styles.top, cursor: "pointer" }}
+        onClick={() => setExpandido((e) => !e)}
+      >
         {clicavel && (
           <input
             type="checkbox"
@@ -50,14 +62,17 @@ export default function ProdutoGrupoCard({
         </div>
 
         {rightSlot}
+
+        <span style={styles.expandIcon}>{expandido ? "▲" : "▼"}</span>
       </div>
 
       <div style={styles.tamanhos}>
-        {(grupo.variacoes || []).length === 0 && (
+        {variacoes.length === 0 && (
           <span style={styles.semTamanho}>sem variações cadastradas</span>
         )}
-        {(grupo.variacoes || []).map((v) => {
+        {variacoes.map((v) => {
           const comEstoque = Number(v.estoque) > 0;
+          const rotulo = limparTamanho(v.tamanho) || "Único";
           return (
             <span
               key={v.id}
@@ -68,11 +83,39 @@ export default function ProdutoGrupoCard({
                 background: comEstoque ? COLORS.stockOkBg : COLORS.stockOutBg,
               }}
             >
-              {v.tamanho || "Único"}
+              {rotulo}
             </span>
           );
         })}
       </div>
+
+      {expandido && (
+        <div style={styles.expandBox}>
+          <table style={styles.expandTable}>
+            <thead>
+              <tr>
+                <th style={styles.expandTh}>Tamanho</th>
+                <th style={styles.expandTh}>Estoque</th>
+              </tr>
+            </thead>
+            <tbody>
+              {variacoes.length === 0 && (
+                <tr>
+                  <td style={styles.expandTd} colSpan={2}>
+                    Sem variações cadastradas.
+                  </td>
+                </tr>
+              )}
+              {variacoes.map((v) => (
+                <tr key={v.id}>
+                  <td style={styles.expandTd}>{limparTamanho(v.tamanho) || "Único"}</td>
+                  <td style={styles.expandTd}>{v.estoque ?? 0}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -101,6 +144,7 @@ const styles = {
   imagePlaceholder: { width: "100%", height: "100%", background: "#f2f2f2" },
   nome: { margin: 0, fontWeight: 600, fontSize: 14, overflowWrap: "anywhere" },
   codigo: { margin: "2px 0 0", fontSize: 12, color: COLORS.muted },
+  expandIcon: { fontSize: 10, color: COLORS.muted, flexShrink: 0 },
   tamanhos: { display: "flex", flexWrap: "wrap", gap: 6 },
   semTamanho: { fontSize: 12, color: COLORS.muted },
   badge: {
@@ -108,5 +152,21 @@ const styles = {
     fontWeight: 600,
     padding: "3px 10px",
     borderRadius: 999,
+  },
+  expandBox: {
+    borderTop: `1px solid ${COLORS.border}`,
+    paddingTop: 8,
+  },
+  expandTable: { width: "100%", borderCollapse: "collapse" },
+  expandTh: {
+    textAlign: "left",
+    fontSize: 11,
+    color: COLORS.muted,
+    padding: "4px 6px",
+  },
+  expandTd: {
+    fontSize: 13,
+    padding: "4px 6px",
+    borderTop: `1px solid ${COLORS.border}`,
   },
 };
