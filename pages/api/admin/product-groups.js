@@ -1,7 +1,7 @@
 // pages/api/admin/product-groups.js
 // GET /api/admin/product-groups?search=texto
-// Retorna os produtos já consolidados (1 linha por produto, com a
-// lista de tamanhos/estoque dentro de "variacoes").
+// Lê da view produtos_catalogo -- já vem com o produto e o array de
+// tamanhos/estoque prontos, sem precisar de embed aninhado.
 import { requireAdmin } from "../../../lib/adminSession";
 import { supabaseAdmin } from "../../../lib/supabaseAdmin";
 
@@ -15,10 +15,8 @@ export default async function handler(req, res) {
   const search = String(req.query.search || "").trim();
 
   let query = supabaseAdmin
-    .from("product_groups")
-    .select(
-      "id, nome, codigo, imagem_url, preco_venda, preco_custo, variacoes:products(id, tamanho, estoque)"
-    )
+    .from("produtos_catalogo")
+    .select("id, nome, codigo, imagem_url, preco_venda, preco_custo, variacoes")
     .order("nome", { ascending: true })
     .limit(200);
 
