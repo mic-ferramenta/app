@@ -252,19 +252,28 @@ function extractImage(detail) {
   return null;
 }
 
-// Confirmado no schema oficial da API v3: a variação traz o id do pai
-// no campo "idProdutoPai" (número direto, não um objeto aninhado). O
-// produto "pai" (quando existe de fato) traz um array "variacoes".
+// CONFIRMADO com dado real da sua conta (via sync-bling-debug.js): o
+// vínculo com o pai vem aninhado em variacao.produtoPai.id -- não em
+// idProdutoPai solto como a documentação sugeria. Mantemos o campo
+// solto como fallback secundário, sem custo, caso outra conta use.
 function extractParentId(detail) {
-  return detail?.idProdutoPai ?? null;
+  return detail?.variacao?.produtoPai?.id ?? detail?.idProdutoPai ?? null;
 }
 
 function isParentProduct(detail) {
   return Array.isArray(detail?.variacoes) && detail.variacoes.length > 0;
 }
 
-// Fallback para contas onde o Bling não expõe idProdutoPai/variacoes:
-// separa "Nome do produto Tamanho:XX" em base + tamanho.
+// A sua conta manda variacao.nome como "Tamanho:M" (com o prefixo
+// junto) -- isso tira o prefixo antes de gravar, pra já salvar limpo
+// no banco (não depender só da blindagem que existe na tela).
+function limparPrefixoTamanho(v) {
+  if (!v) return v;
+  return String(v).replace(/^\s*tamanho\s*:\s*/i, "").trim();
+}
+
+// Fallback para produtos sem variacao.produtoPai.id: separa
+// "Nome do produto Tamanho:XX" em base + tamanho.
 function splitNomeTamanho(nomeCompleto) {
   const nome = String(nomeCompleto || "");
   const match = nome.match(/^(.*?)\s*Tamanho\s*:\s*(\S+)\s*$/i);
@@ -314,18 +323,17 @@ async function syncProducts(accessToken) {
 
   const variacoesPendentes = [];
 
-  // Passagem única: a chave por NOME é sempre a prioridade (é o que
-  // essa conta usa de fato pra ligar tamanho ao produto). idProdutoPai
-  // só entra como reforço quando não dá pra extrair nada do nome.
+  // Passagem única. Prioridade do vínculo:
+  //   1) variacao.produtoPai.id -- é uma FK de verdade, confiável
+  //   2) padrão "Nome Tamanho:XX" no nome -- só quando não há (1)
+  //   3) produto realmente simples, sem nenhuma variação
   for (const detail of details) {
-    const { base, tamanho: tamanhoDoNome } = splitNomeTamanho(detail.nome);
-
     if (isParentProduct(detail)) {
       // é o próprio "pai": não vira linha de variação, só cabeçalho
-      // do grupo -- usa o NOME COMPLETO dele como chave, pra bater
-      // exatamente com a chave que os filhos calculam a partir do
-      // próprio nome (a base, sem o "Tamanho:XX").
-      const key = `nome-${chaveGrupoPorNome(detail.nome)}`;
+      // do grupo. Chave = o PRÓPRIO id dele no Bling -- é exatamente
+      // o valor que os filhos vão referenciar via produtoPai.id, então
+      // as duas pontas sempre batem, sem depender de nome nenhum.
+      const key = `bling-${detail.id}`;
       registrarPaiAutoritativo(key, {
         bling_id: detail.id,
         nome: detail.nome ?? null,
@@ -338,11 +346,22 @@ async function syncProducts(accessToken) {
       continue;
     }
 
+    const parentId = extractParentId(detail);
+    const { base, tamanho: tamanhoDoNome } = splitNomeTamanho(detail.nome);
     let key;
     let tamanho;
 
-    if (tamanhoDoNome !== null) {
-      // variação identificada pelo padrão "... Tamanho:XX" no nome
+    if (parentId) {
+      // variação real, ligada por variacao.produtoPai.id
+      key = `bling-${parentId}`;
+      tamanho =
+        limparPrefixoTamanho(detail?.variacao?.nome) || tamanhoDoNome || null;
+      // se o pai ainda não apareceu nesta sincronização, registra um
+      // mínimo agora -- é completado quando o pai for processado
+      // (nesta mesma leva ou na próxima).
+      registrarPaiSeNecessario(key, { bling_id: parentId, nome: base });
+    } else if (tamanhoDoNome !== null) {
+      // sem produtoPai.id, mas o nome segue "... Tamanho:XX"
       key = `nome-${chaveGrupoPorNome(base)}`;
       tamanho = tamanhoDoNome;
       registrarPaiSeNecessario(key, {
@@ -354,26 +373,18 @@ async function syncProducts(accessToken) {
         situacao: detail.situacao ?? null,
       });
     } else {
-      const parentId = extractParentId(detail);
-      if (parentId) {
-        // variação real via idProdutoPai (contas que têm esse campo)
-        key = `bling-${parentId}`;
-        tamanho = detail?.variacao?.nome || null;
-        registrarPaiSeNecessario(key, { bling_id: parentId, nome: base });
-      } else {
-        // produto realmente simples, sem nenhum tipo de variação
-        key = `bling-${detail.id}`;
-        tamanho = null;
-        registrarPaiSeNecessario(key, {
-          bling_id: detail.id,
-          nome: detail.nome ?? null,
-          codigo: detail.codigo ?? null,
-          imagem_url: extractImage(detail),
-          preco_venda: detail.preco ?? null,
-          preco_custo: extractCost(detail),
-          situacao: detail.situacao ?? null,
-        });
-      }
+      // produto realmente simples, sem nenhum tipo de variação
+      key = `bling-${detail.id}`;
+      tamanho = null;
+      registrarPaiSeNecessario(key, {
+        bling_id: detail.id,
+        nome: detail.nome ?? null,
+        codigo: detail.codigo ?? null,
+        imagem_url: extractImage(detail),
+        preco_venda: detail.preco ?? null,
+        preco_custo: extractCost(detail),
+        situacao: detail.situacao ?? null,
+      });
     }
 
     variacoesPendentes.push({
