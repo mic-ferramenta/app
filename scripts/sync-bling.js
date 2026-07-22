@@ -141,34 +141,42 @@ function extractDocumento(c) {
   return c?.numeroDocumento ?? c?.documento ?? null;
 }
 
+// Upsert em lotes -- muito mais rápido que 1 chamada por linha. O
+// Supabase aceita um array inteiro em um único upsert.
+async function upsertInChunks(table, rows, onConflict, chunkSize = 500) {
+  let synced = 0;
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize);
+    const { error, count } = await supabase
+      .from(table)
+      .upsert(chunk, { onConflict, count: "exact" });
+
+    if (error) {
+      console.error(`Erro ao salvar lote em ${table} (linhas ${i}-${i + chunk.length}):`, error.message);
+    } else {
+      synced += count ?? chunk.length;
+    }
+  }
+  return synced;
+}
+
 async function syncCustomers(accessToken) {
   console.log("Buscando clientes (contatos) no Bling...");
   const customers = await listAllCustomers(accessToken);
-  console.log(`Encontrados ${customers.length} contatos.`);
+  console.log(`Encontrados ${customers.length} contatos. Salvando em lote...`);
 
-  let synced = 0;
-  for (const c of customers) {
-    const row = {
-      bling_id: c.id,
-      nome: c.nome ?? null,
-      documento: extractDocumento(c),
-      email: c.email ?? null,
-      telefone: c.telefone ?? c.celular ?? null,
-      situacao: c.situacao ?? null,
-      raw_data: c,
-      updated_at: new Date().toISOString(),
-    };
+  const rows = customers.map((c) => ({
+    bling_id: c.id,
+    nome: c.nome ?? null,
+    documento: extractDocumento(c),
+    email: c.email ?? null,
+    telefone: c.telefone ?? c.celular ?? null,
+    situacao: c.situacao ?? null,
+    raw_data: c,
+    updated_at: new Date().toISOString(),
+  }));
 
-    const { error } = await supabase
-      .from("bling_customers")
-      .upsert(row, { onConflict: "bling_id" });
-
-    if (error) {
-      console.error(`Erro ao salvar contato ${c.id}:`, error.message);
-    } else {
-      synced += 1;
-    }
-  }
+  const synced = await upsertInChunks("bling_customers", rows, "bling_id");
 
   console.log(`Clientes sincronizados: ${synced}.`);
   return synced;
@@ -299,9 +307,9 @@ async function syncProducts(accessToken) {
     groupIdByBlingGroupId.set(detail.id, groupId);
   }
 
-  // Passo 2: grava as variações (e produtos simples) na tabela products,
-  // já ligadas ao grupo certo.
-  let syncedCount = 0;
+  // Passo 2: monta as linhas de variações (e produtos simples), já
+  // ligadas ao grupo certo, e grava tudo de uma vez em lote.
+  const productRows = [];
   for (const detail of details) {
     const parentId = extractParentId(detail);
 
@@ -332,7 +340,7 @@ async function syncProducts(accessToken) {
       groupId = groupIdByBlingGroupId.get(detail.id);
     }
 
-    const row = {
+    productRows.push({
       bling_id: detail.id,
       bling_parent_id: parentId,
       group_id: groupId,
@@ -346,18 +354,10 @@ async function syncProducts(accessToken) {
       tamanho,
       raw_data: detail,
       updated_at: now,
-    };
-
-    const { error } = await supabase
-      .from("products")
-      .upsert(row, { onConflict: "bling_id" });
-
-    if (error) {
-      console.error(`Erro ao salvar produto ${detail.id}:`, error.message);
-    } else {
-      syncedCount += 1;
-    }
+    });
   }
+
+  const syncedCount = await upsertInChunks("products", productRows, "bling_id");
 
   console.log(`Produtos sincronizados: ${syncedCount}.`);
   return syncedCount;
@@ -365,34 +365,49 @@ async function syncProducts(accessToken) {
 
 async function main() {
   const startedAt = new Date().toISOString();
-  let syncedCount = 0;
 
-  try {
-    const accessToken = await getValidAccessToken();
+  const accessToken = await getValidAccessToken();
 
-    const customersSynced = await syncCustomers(accessToken);
-    const productsSynced = await syncProducts(accessToken);
-    syncedCount = customersSynced + productsSynced;
+  // Clientes e produtos rodam de forma independente: se um dos dois
+  // falhar (ex: falta de permissão/escopo no app do Bling para um
+  // desses recursos), o outro continua rodando normalmente em vez de
+  // derrubar a sincronização inteira.
+  const resultados = await Promise.allSettled([
+    syncCustomers(accessToken),
+    syncProducts(accessToken),
+  ]);
 
-    await supabase.from("sync_logs").insert({
-      started_at: startedAt,
-      finished_at: new Date().toISOString(),
-      status: "success",
-      products_synced: syncedCount,
-    });
+  const [customersResult, productsResult] = resultados;
+  const customersSynced =
+    customersResult.status === "fulfilled" ? customersResult.value : 0;
+  const productsSynced =
+    productsResult.status === "fulfilled" ? productsResult.value : 0;
 
-    console.log(
-      `Sincronização concluída: ${customersSynced} clientes, ${productsSynced} produtos.`
-    );
-  } catch (err) {
-    console.error("Erro na sincronização:", err);
-    await supabase.from("sync_logs").insert({
-      started_at: startedAt,
-      finished_at: new Date().toISOString(),
-      status: "error",
-      products_synced: syncedCount,
-      error_message: String(err.message || err),
-    });
+  const erros = resultados
+    .filter((r) => r.status === "rejected")
+    .map((r) => String(r.reason?.message || r.reason));
+
+  if (erros.length > 0) {
+    console.error("Erro(s) na sincronização:", erros.join(" | "));
+  }
+
+  await supabase.from("sync_logs").insert({
+    started_at: startedAt,
+    finished_at: new Date().toISOString(),
+    status: erros.length > 0 ? "error" : "success",
+    products_synced: customersSynced + productsSynced,
+    error_message: erros.length > 0 ? erros.join(" | ") : null,
+  });
+
+  console.log(
+    `Sincronização finalizada: ${customersSynced} clientes, ${productsSynced} produtos.` +
+      (erros.length > 0 ? ` (com erro em ${erros.length} etapa(s))` : "")
+  );
+
+  // Só falha o job do GitHub Actions se AMBAS as etapas quebrarem --
+  // uma falha isolada (ex: escopo de contatos faltando) não deve
+  // impedir os produtos de continuarem sincronizando a cada 5 min.
+  if (erros.length === resultados.length) {
     process.exit(1);
   }
 }

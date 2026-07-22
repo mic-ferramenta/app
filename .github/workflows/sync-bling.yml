@@ -8,10 +8,14 @@ on:
     - cron: "*/5 * * * *"
   workflow_dispatch: {} # permite rodar manualmente pela aba Actions
 
+concurrency:
+  group: sync-bling
+  cancel-in-progress: true # se uma nova execução começar, cancela a anterior em vez de empilhar
+
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 4 # evita que uma execução travada se sobreponha à próxima
+    timeout-minutes: 15 # sincroniza clientes + produtos (com variações); ajuste pra cima se seu catálogo crescer bastante
     steps:
       - name: Checkout do repositório
         uses: actions/checkout@v4
