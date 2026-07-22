@@ -96,7 +96,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Selecione ao menos um produto." });
     }
     for (const item of items) {
-      if (!item.group_id || item.preco_final === undefined || item.preco_final === "") {
+      if (!item.pai_id || item.preco_final === undefined || item.preco_final === "") {
         return res.status(400).json({ error: "Todo item precisa de um preço final." });
       }
     }
@@ -120,7 +120,7 @@ export default async function handler(req, res) {
 
       const rows = items.map((item, index) => ({
         price_list_id: priceList.id,
-        group_id: item.group_id,
+        pai_id: item.pai_id,
         preco: Number(item.preco_final),
         ordem: index,
       }));

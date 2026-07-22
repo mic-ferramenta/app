@@ -94,7 +94,7 @@ export async function getServerSideProps({ params }) {
   const { data: itensRaw } = await supabaseAdmin
     .from("price_list_items")
     .select(
-      "id, preco, ordem, grupo:group_id ( id, nome, imagem_url, variacoes:products ( id, tamanho, estoque ) )"
+      "id, preco, ordem, grupo:pai_id ( id, nome, imagem_url, variacoes:produtos_variacoes ( id, tamanho, estoque ) )"
     )
     .eq("price_list_id", lista.id)
     .order("ordem", { ascending: true });

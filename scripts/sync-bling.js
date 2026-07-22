@@ -1,14 +1,12 @@
 // scripts/sync-bling.js
 // Executado pelo GitHub Actions a cada 5 minutos.
-// 1. Lê o token atual do Supabase (renova se necessário)
-// 2. Sincroniza os CLIENTES (contatos) do Bling -> public.bling_customers
-// 3. Sincroniza os PRODUTOS do Bling, tratando produtos com variação
-//    (ex: um "produto pai" tipo camisa, com uma variação por tamanho):
-//      - public.product_groups  -> 1 linha por produto (o "pai" ou o
-//        produto simples), com nome/imagem/preço/custo consolidados
-//      - public.products        -> continua 1 linha por variação
-//        vendável, agora ligada ao grupo via group_id e com o
-//        tamanho em products.tamanho
+//
+// Grava o catálogo em duas tabelas enxutas, sem nenhum dado duplicado:
+//   produtos_pai        -> nome, imagem, preço de venda, custo (1 por produto)
+//   produtos_variacoes  -> tamanho + estoque (1 por tamanho vendável)
+// O app lê tudo através da view produtos_catalogo (ver migração SQL).
+//
+// Também sincroniza os CLIENTES (contatos) do Bling -> public.bling_customers
 
 const { createClient } = require("@supabase/supabase-js");
 
@@ -107,6 +105,44 @@ async function blingFetch(path, accessToken) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Upsert em lotes -- muito mais rápido que 1 chamada por linha, e é o
+// que garante que isso não fica lento conforme o catálogo cresce.
+async function upsertInChunks(table, rows, onConflict, chunkSize = 500) {
+  let synced = 0;
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize);
+    const { error, count } = await supabase
+      .from(table)
+      .upsert(chunk, { onConflict, count: "exact" });
+
+    if (error) {
+      console.error(`Erro ao salvar lote em ${table} (linhas ${i}-${i + chunk.length}):`, error.message);
+    } else {
+      synced += count ?? chunk.length;
+    }
+  }
+  return synced;
+}
+
+// Igual ao upsertInChunks, mas devolve o id gerado/existente de cada
+// linha (precisamos disso pra ligar cada variação ao seu pai).
+async function upsertInChunksComRetorno(table, rows, onConflict, returning, chunkSize = 500) {
+  const resultados = [];
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize);
+    const { data, error } = await supabase
+      .from(table)
+      .upsert(chunk, { onConflict })
+      .select(returning);
+
+    if (error) {
+      throw new Error(`Erro ao salvar lote em ${table} (linhas ${i}-${i + chunk.length}): ${error.message}`);
+    }
+    resultados.push(...(data || []));
+  }
+  return resultados;
+}
+
 // ================================================================
 // CLIENTES (contatos) do Bling
 // ================================================================
@@ -132,32 +168,8 @@ async function listAllCustomers(accessToken) {
   return all;
 }
 
-// IMPORTANTE: confira no seu console.log de teste os nomes exatos dos
-// campos retornados pela sua conta (ex: pode vir "numeroDocumento" ou
-// dentro de um objeto "documento"). Ajuste extractDocumento/extractEmail
-// se necessário -- a lista de /contatos costuma vir mais enxuta que o
-// detalhe de /contatos/{id}.
 function extractDocumento(c) {
   return c?.numeroDocumento ?? c?.documento ?? null;
-}
-
-// Upsert em lotes -- muito mais rápido que 1 chamada por linha. O
-// Supabase aceita um array inteiro em um único upsert.
-async function upsertInChunks(table, rows, onConflict, chunkSize = 500) {
-  let synced = 0;
-  for (let i = 0; i < rows.length; i += chunkSize) {
-    const chunk = rows.slice(i, i + chunkSize);
-    const { error, count } = await supabase
-      .from(table)
-      .upsert(chunk, { onConflict, count: "exact" });
-
-    if (error) {
-      console.error(`Erro ao salvar lote em ${table} (linhas ${i}-${i + chunk.length}):`, error.message);
-    } else {
-      synced += count ?? chunk.length;
-    }
-  }
-  return synced;
 }
 
 async function syncCustomers(accessToken) {
@@ -183,7 +195,7 @@ async function syncCustomers(accessToken) {
 }
 
 // ================================================================
-// PRODUTOS (com suporte a variações / tamanhos)
+// PRODUTOS: produtos_pai + produtos_variacoes
 // ================================================================
 
 async function listAllProducts(accessToken) {
@@ -213,6 +225,11 @@ async function getProductDetail(id, accessToken) {
 }
 
 function extractCost(detail) {
+  // ATENÇÃO: o schema oficial do produto no Bling v3 não expõe custo
+  // diretamente -- ele mora na entidade separada "Produtos - Fornecedores".
+  // Isso aqui é best-effort (funciona se a sua conta retornar esse campo
+  // "extra"); se os custos aparecerem sempre nulos/zerados, o próximo
+  // passo é buscar em /produtos/{id}/fornecedores.
   return detail?.fornecedor?.precoCusto ?? detail?.precoCusto ?? null;
 }
 
@@ -231,24 +248,19 @@ function extractImage(detail) {
   return null;
 }
 
-// Um produto "pai" (com variações) normalmente traz um array
-// "variacoes" no GET /produtos/{id}, e cada filho traria
-// "produtoPai": { "id": <id do pai> }. Na prática, contas como a sua
-// não retornam esse vínculo -- o tamanho vem embutido no próprio nome
-// (ex: "Camisa Brasil Feminina Azul II 26/27 Tamanho:3GG"). Por isso a
-// separação por nome (splitNomeTamanho) é o mecanismo principal; o
-// produtoPai/variacoes só é usado quando presente, como bônus.
+// Confirmado no schema oficial da API v3: a variação traz o id do pai
+// no campo "idProdutoPai" (número direto, não um objeto aninhado). O
+// produto "pai" (quando existe de fato) traz um array "variacoes".
 function extractParentId(detail) {
-  return detail?.produtoPai?.id ?? null;
+  return detail?.idProdutoPai ?? null;
 }
 
 function isParentProduct(detail) {
   return Array.isArray(detail?.variacoes) && detail.variacoes.length > 0;
 }
 
-// Separa "Nome do produto Tamanho:XX" em { base: "Nome do produto", tamanho: "XX" }.
-// Se não achar o padrão "Tamanho:", devolve o nome inteiro como base e
-// tamanho null (produto sem variação de tamanho).
+// Fallback para contas onde o Bling não expõe idProdutoPai/variacoes:
+// separa "Nome do produto Tamanho:XX" em base + tamanho.
 function splitNomeTamanho(nomeCompleto) {
   const nome = String(nomeCompleto || "");
   const match = nome.match(/^(.*?)\s*Tamanho\s*:\s*(\S+)\s*$/i);
@@ -258,9 +270,6 @@ function splitNomeTamanho(nomeCompleto) {
   return { base: nome.trim(), tamanho: null };
 }
 
-// Normaliza o nome-base pra virar chave de agrupamento (ignora acento,
-// caixa e espaços duplicados) -- assim variações do mesmo produto caem
-// sempre no mesmo grupo mesmo com pequenas diferenças de digitação.
 function chaveGrupoPorNome(baseNome) {
   return String(baseNome || "")
     .normalize("NFD")
@@ -268,17 +277,6 @@ function chaveGrupoPorNome(baseNome) {
     .toLowerCase()
     .replace(/\s+/g, " ")
     .trim();
-}
-
-async function upsertGroup(row) {
-  const { data, error } = await supabase
-    .from("product_groups")
-    .upsert(row, { onConflict: "chave_grupo" })
-    .select("id")
-    .single();
-
-  if (error) throw new Error(`Erro ao salvar grupo ${row.chave_grupo}: ${error.message}`);
-  return data.id;
 }
 
 async function syncProducts(accessToken) {
@@ -294,85 +292,125 @@ async function syncProducts(accessToken) {
   }
 
   const now = new Date().toISOString();
-  const groupIdByKey = new Map();
 
-  async function getOrCreateGroupId(key, groupRow) {
-    if (groupIdByKey.has(key)) return groupIdByKey.get(key);
-    const id = await upsertGroup({ chave_grupo: key, ...groupRow });
-    groupIdByKey.set(key, id);
-    return id;
+  // ------------------------------------------------------------
+  // Passo 1: monta as linhas de produtos_pai (chave -> linha)
+  // ------------------------------------------------------------
+  const paisPorChave = new Map();
+
+  function registrarPaiSeNecessario(key, dadosCompletos) {
+    if (paisPorChave.has(key)) return;
+    paisPorChave.set(key, { chave_grupo: key, updated_at: now, ...dadosCompletos });
   }
 
-  // Passo 1: grupos "pai" reais do Bling, quando o campo existir
-  // (fica como bônus -- na sua conta isso normalmente não acontece).
+  // 1a) produtos "pai" de verdade, vindos com array variacoes
   for (const detail of details) {
-    if (extractParentId(detail)) continue;
-    if (!isParentProduct(detail)) continue;
+    if (extractParentId(detail)) continue; // é filho, tratado no passo 2
+    if (!isParentProduct(detail)) continue; // não é pai puro
 
-    await getOrCreateGroupId(`bling-${detail.id}`, {
-      bling_group_id: detail.id,
+    registrarPaiSeNecessario(`bling-${detail.id}`, {
+      bling_id: detail.id,
       nome: detail.nome ?? null,
       codigo: detail.codigo ?? null,
       imagem_url: extractImage(detail),
       preco_venda: detail.preco ?? null,
       preco_custo: extractCost(detail),
       situacao: detail.situacao ?? null,
-      updated_at: now,
     });
   }
 
-  // Passo 2: monta as variações. Usa produtoPai quando existe; senão,
-  // agrupa pelo nome-base e tira o tamanho do sufixo "Tamanho:XX".
-  const productRows = [];
+  // ------------------------------------------------------------
+  // Passo 2: monta as linhas de produtos_variacoes, garantindo que
+  // cada uma tenha um pai (criando um mínimo se ainda não existir).
+  // ------------------------------------------------------------
+  const variacoesPendentes = [];
+
   for (const detail of details) {
     const parentId = extractParentId(detail);
+    if (!parentId && isParentProduct(detail)) continue; // já é o pai, tratado acima
+
     const { base, tamanho: tamanhoDoNome } = splitNomeTamanho(detail.nome);
+    let key;
+    let tamanho;
 
-    if (!parentId && isParentProduct(detail)) {
-      // é o próprio "pai": não é vendável diretamente, só cabeçalho do
-      // grupo (já salvo no passo 1). Não cria linha em products.
-      continue;
-    }
-
-    const key = parentId ? `bling-${parentId}` : `nome-${chaveGrupoPorNome(base)}`;
-    const tamanho = detail?.variacao?.nome || tamanhoDoNome || null;
-
-    if (!groupIdByKey.has(key)) {
-      await getOrCreateGroupId(key, {
-        bling_group_id: parentId || null,
+    if (parentId) {
+      // variação real, ligada por idProdutoPai
+      key = `bling-${parentId}`;
+      tamanho = detail?.variacao?.nome || tamanhoDoNome || null;
+      registrarPaiSeNecessario(key, { bling_id: parentId, nome: base });
+    } else if (tamanhoDoNome !== null) {
+      // sem vínculo estruturado, mas o nome segue "... Tamanho:XX"
+      key = `nome-${chaveGrupoPorNome(base)}`;
+      tamanho = tamanhoDoNome;
+      registrarPaiSeNecessario(key, {
         nome: base,
         codigo: detail.codigo ?? null,
         imagem_url: extractImage(detail),
         preco_venda: detail.preco ?? null,
         preco_custo: extractCost(detail),
         situacao: detail.situacao ?? null,
-        updated_at: now,
+      });
+    } else {
+      // produto totalmente simples, sem nenhuma variação de tamanho
+      key = `bling-${detail.id}`;
+      tamanho = null;
+      registrarPaiSeNecessario(key, {
+        bling_id: detail.id,
+        nome: detail.nome ?? null,
+        codigo: detail.codigo ?? null,
+        imagem_url: extractImage(detail),
+        preco_venda: detail.preco ?? null,
+        preco_custo: extractCost(detail),
+        situacao: detail.situacao ?? null,
       });
     }
 
-    const groupId = groupIdByKey.get(key);
-
-    productRows.push({
+    variacoesPendentes.push({
+      key,
       bling_id: detail.id,
-      bling_parent_id: parentId,
-      group_id: groupId,
       codigo: detail.codigo ?? null,
-      nome: detail.nome ?? null,
-      preco_venda: detail.preco ?? null,
-      preco_custo: extractCost(detail),
+      tamanho,
       estoque: extractStock(detail),
       situacao: detail.situacao ?? null,
-      imagem_url: extractImage(detail),
-      tamanho,
-      raw_data: detail,
       updated_at: now,
     });
   }
 
-  const syncedCount = await upsertInChunks("products", productRows, "bling_id");
+  // ------------------------------------------------------------
+  // Grava produtos_pai primeiro (em lotes) e pega os ids de volta,
+  // pra poder ligar cada variação ao pai certo.
+  // ------------------------------------------------------------
+  const paiRows = Array.from(paisPorChave.values());
+  const paisSalvos = await upsertInChunksComRetorno(
+    "produtos_pai",
+    paiRows,
+    "chave_grupo",
+    "id, chave_grupo"
+  );
 
-  console.log(`Produtos sincronizados: ${syncedCount}.`);
-  return syncedCount;
+  const idPaiPorChave = new Map(paisSalvos.map((p) => [p.chave_grupo, p.id]));
+
+  console.log(`Produtos (pai) sincronizados: ${paisSalvos.length}.`);
+
+  // ------------------------------------------------------------
+  // Grava produtos_variacoes em lotes, já com o pai_id resolvido.
+  // ------------------------------------------------------------
+  const variacaoRows = variacoesPendentes
+    .map((v) => ({
+      bling_id: v.bling_id,
+      pai_id: idPaiPorChave.get(v.key),
+      codigo: v.codigo,
+      tamanho: v.tamanho,
+      estoque: v.estoque,
+      situacao: v.situacao,
+      updated_at: v.updated_at,
+    }))
+    .filter((v) => v.pai_id); // segurança: nunca deveria faltar
+
+  const syncedCount = await upsertInChunks("produtos_variacoes", variacaoRows, "bling_id");
+
+  console.log(`Variações sincronizadas: ${syncedCount}.`);
+  return paisSalvos.length + syncedCount;
 }
 
 async function main() {
@@ -381,9 +419,8 @@ async function main() {
   const accessToken = await getValidAccessToken();
 
   // Clientes e produtos rodam de forma independente: se um dos dois
-  // falhar (ex: falta de permissão/escopo no app do Bling para um
-  // desses recursos), o outro continua rodando normalmente em vez de
-  // derrubar a sincronização inteira.
+  // falhar, o outro continua rodando normalmente em vez de derrubar a
+  // sincronização inteira.
   const resultados = await Promise.allSettled([
     syncCustomers(accessToken),
     syncProducts(accessToken),
@@ -412,13 +449,10 @@ async function main() {
   });
 
   console.log(
-    `Sincronização finalizada: ${customersSynced} clientes, ${productsSynced} produtos.` +
+    `Sincronização finalizada: ${customersSynced} clientes, ${productsSynced} registros de produto.` +
       (erros.length > 0 ? ` (com erro em ${erros.length} etapa(s))` : "")
   );
 
-  // Só falha o job do GitHub Actions se AMBAS as etapas quebrarem --
-  // uma falha isolada (ex: escopo de contatos faltando) não deve
-  // impedir os produtos de continuarem sincronizando a cada 5 min.
   if (erros.length === resultados.length) {
     process.exit(1);
   }

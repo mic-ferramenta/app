@@ -114,7 +114,7 @@ export default function NovaLista() {
     setGerando(true);
 
     const items = listaSelecionados.map((g) => ({
-      group_id: g.id,
+      pai_id: g.id,
       preco_final: itensPreco[g.id]?.final,
     }));
 

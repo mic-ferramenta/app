@@ -10,14 +10,14 @@ export default async function handler(req, res) {
   }
 
   if (req.method === "POST") {
-    const { price_list_id, group_id, preco } = req.body || {};
-    if (!price_list_id || !group_id || preco === undefined || preco === "") {
+    const { price_list_id, pai_id, preco } = req.body || {};
+    if (!price_list_id || !pai_id || preco === undefined || preco === "") {
       return res.status(400).json({ error: "Dados incompletos." });
     }
 
     const { error } = await supabaseAdmin.from("price_list_items").upsert(
-      { price_list_id, group_id, preco: Number(preco) },
-      { onConflict: "price_list_id,group_id" }
+      { price_list_id, pai_id, preco: Number(preco) },
+      { onConflict: "price_list_id,pai_id" }
     );
 
     if (error) return res.status(500).json({ error: error.message });
@@ -25,8 +25,8 @@ export default async function handler(req, res) {
   }
 
   if (req.method === "DELETE") {
-    const { price_list_id, group_id } = req.body || {};
-    if (!price_list_id || !group_id) {
+    const { price_list_id, pai_id } = req.body || {};
+    if (!price_list_id || !pai_id) {
       return res.status(400).json({ error: "Dados incompletos." });
     }
 
@@ -34,7 +34,7 @@ export default async function handler(req, res) {
       .from("price_list_items")
       .delete()
       .eq("price_list_id", price_list_id)
-      .eq("group_id", group_id);
+      .eq("pai_id", pai_id);
 
     if (error) return res.status(500).json({ error: error.message });
     return res.status(200).json({ ok: true });

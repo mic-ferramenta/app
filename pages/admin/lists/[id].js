@@ -40,7 +40,7 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         price_list_id: lista.id,
-        group_id: grupo.id,
+        pai_id: grupo.id,
         preco: grupo.preco_venda || 0,
       }),
     });
@@ -64,7 +64,7 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl }) {
     await fetch("/api/admin/price-list-items", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ price_list_id: lista.id, group_id: groupId, preco }),
+      body: JSON.stringify({ price_list_id: lista.id, pai_id: groupId, preco }),
     });
     setSalvandoId(null);
   }
@@ -74,7 +74,7 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl }) {
     await fetch("/api/admin/price-list-items", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ price_list_id: lista.id, group_id: groupId }),
+      body: JSON.stringify({ price_list_id: lista.id, pai_id: groupId }),
     });
     setItens((prev) => {
       const copy = { ...prev };
@@ -199,7 +199,7 @@ export async function getServerSideProps({ req, params }) {
 
   const { data: itensRaw } = await supabaseAdmin
     .from("price_list_items")
-    .select("preco, grupo:group_id ( id, nome, codigo )")
+    .select("preco, grupo:pai_id ( id, nome, codigo )")
     .eq("price_list_id", id);
 
   const itensIniciais = {};
