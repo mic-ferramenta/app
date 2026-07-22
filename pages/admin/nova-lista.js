@@ -181,9 +181,9 @@ export default function NovaLista() {
         <a href="/admin" style={styles.backLink}>← Voltar</a>
       </header>
 
-      <div style={styles.columns}>
-        <section style={styles.column}>
-          <h2 style={styles.colTitle}>1. Cliente</h2>
+      <section style={styles.section}>
+        <h2 style={styles.colTitle}>1. Cliente</h2>
+        {!clienteSelecionado && (
           <input
             type="text"
             placeholder="Buscar cliente..."
@@ -191,57 +191,77 @@ export default function NovaLista() {
             onChange={(e) => setBuscaCliente(e.target.value)}
             style={styles.search}
           />
-          <div style={styles.listBox}>
+        )}
+
+        {clienteSelecionado && (
+          <div style={styles.clienteSelecionadoBox}>
+            <div>
+              <p style={{ margin: 0, fontWeight: 700, fontSize: 15 }}>
+                {clienteSelecionado.nome}
+              </p>
+              <p style={{ margin: "2px 0 0", fontSize: 13, color: COLORS.muted }}>
+                {clienteSelecionado.telefone || "sem telefone cadastrado"}
+                {clienteSelecionado.documento ? ` · ${clienteSelecionado.documento}` : ""}
+              </p>
+            </div>
+            <button
+              onClick={() => setClienteSelecionado(null)}
+              style={styles.trocarClienteButton}
+            >
+              Trocar
+            </button>
+          </div>
+        )}
+
+        {!clienteSelecionado && (
+          <div style={styles.listBoxClientes}>
             {clientes.map((c) => (
               <div
                 key={c.id}
                 onClick={() => setClienteSelecionado(c)}
-                style={{
-                  ...styles.clienteRow,
-                  borderColor:
-                    clienteSelecionado?.id === c.id ? COLORS.accent : COLORS.border,
-                  background:
-                    clienteSelecionado?.id === c.id ? COLORS.accentSoft : "#fff",
-                }}
+                style={styles.clienteRow}
               >
                 <p style={{ margin: 0, fontWeight: 600, fontSize: 14 }}>{c.nome}</p>
-                {c.documento && (
-                  <p style={{ margin: 0, fontSize: 12, color: COLORS.muted }}>
-                    {c.documento}
-                  </p>
-                )}
+                <p style={{ margin: "2px 0 0", fontSize: 12, color: COLORS.muted }}>
+                  {c.telefone || "sem telefone"}
+                  {c.documento ? ` · ${c.documento}` : ""}
+                </p>
               </div>
             ))}
             {clientes.length === 0 && (
-              <p style={styles.vazio}>Nenhum cliente encontrado. Confira se a sincronização com o Bling já rodou.</p>
+              <p style={styles.vazio}>
+                Nenhum cliente encontrado. Confira se a sincronização com o Bling já rodou.
+              </p>
             )}
           </div>
-        </section>
+        )}
+      </section>
 
-        <section style={styles.column}>
-          <h2 style={styles.colTitle}>2. Produtos ({listaSelecionados.length} selecionados)</h2>
-          <input
-            type="text"
-            placeholder="Buscar produto por nome ou código..."
-            value={buscaProduto}
-            onChange={(e) => setBuscaProduto(e.target.value)}
-            style={styles.search}
-          />
-          <div style={styles.listBox}>
-            {grupos.map((g) => (
-              <ProdutoGrupoCard
-                key={g.id}
-                grupo={g}
-                selecionado={!!gruposSelecionados[g.id]}
-                onToggle={toggleGrupo}
-              />
-            ))}
-            {grupos.length === 0 && (
-              <p style={styles.vazio}>Nenhum produto encontrado.</p>
-            )}
-          </div>
-        </section>
-      </div>
+      <hr style={styles.divider} />
+
+      <section style={styles.section}>
+        <h2 style={styles.colTitle}>2. Produtos ({listaSelecionados.length} selecionados)</h2>
+        <input
+          type="text"
+          placeholder="Buscar produto por nome ou código..."
+          value={buscaProduto}
+          onChange={(e) => setBuscaProduto(e.target.value)}
+          style={styles.search}
+        />
+        <div style={styles.gridProdutos}>
+          {grupos.map((g) => (
+            <ProdutoGrupoCard
+              key={g.id}
+              grupo={g}
+              selecionado={!!gruposSelecionados[g.id]}
+              onToggle={toggleGrupo}
+            />
+          ))}
+          {grupos.length === 0 && (
+            <p style={styles.vazio}>Nenhum produto encontrado.</p>
+          )}
+        </div>
+      </section>
 
       <footer style={styles.footer}>
         <button
@@ -420,14 +440,19 @@ const styles = {
     fontSize: 14,
     cursor: "pointer",
   },
-  columns: {
+  section: {
     maxWidth: 1100,
-    margin: "0 auto",
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: 24,
+    margin: "0 auto 24px",
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
   },
-  column: { display: "flex", flexDirection: "column", gap: 10, minWidth: 0 },
+  divider: {
+    maxWidth: 1100,
+    margin: "0 auto 24px",
+    border: "none",
+    borderTop: `1px solid ${COLORS.border}`,
+  },
   colTitle: { margin: 0, fontSize: 15 },
   search: {
     padding: "10px 12px",
@@ -435,21 +460,48 @@ const styles = {
     border: `1px solid ${COLORS.border}`,
     fontSize: 14,
   },
-  listBox: {
+  clienteSelecionadoBox: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    border: `1px solid ${COLORS.accent}`,
+    background: COLORS.accentSoft,
+    borderRadius: 8,
+    padding: "12px 16px",
+  },
+  trocarClienteButton: {
+    background: "transparent",
+    border: `1px solid ${COLORS.accent}`,
+    color: COLORS.accent,
+    borderRadius: 6,
+    padding: "6px 12px",
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: "pointer",
+  },
+  listBoxClientes: {
     display: "flex",
     flexDirection: "column",
     gap: 8,
-    maxHeight: 480,
+    maxHeight: 280,
     overflowY: "auto",
     paddingRight: 4,
   },
   clienteRow: {
-    border: "1px solid",
+    border: `1px solid ${COLORS.border}`,
     borderRadius: 8,
     padding: "10px 12px",
     cursor: "pointer",
   },
   vazio: { fontSize: 13, color: COLORS.muted },
+  gridProdutos: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+    gap: 12,
+    maxHeight: 560,
+    overflowY: "auto",
+    paddingRight: 4,
+  },
   footer: {
     maxWidth: 1100,
     margin: "24px auto 0",

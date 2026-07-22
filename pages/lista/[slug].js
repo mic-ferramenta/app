@@ -6,6 +6,13 @@
 
 import { supabaseAdmin } from "../../lib/supabaseAdmin";
 
+// Blindagem: tira um eventual prefixo "Tamanho:" que tenha vindo cru do
+// Bling, não importa a caixa ou os espaços ao redor.
+function limparTamanho(v) {
+  if (!v) return v;
+  return String(v).replace(/^\s*tamanho\s*:\s*/i, "").trim();
+}
+
 export default function ListaDePrecos({ cliente, itens }) {
   return (
     <div style={styles.page}>
@@ -45,7 +52,7 @@ export default function ListaDePrecos({ cliente, itens }) {
                         background: comEstoque ? "#eef2ff" : "#f5f5f5",
                       }}
                     >
-                      {v.tamanho || "Único"}
+                      {limparTamanho(v.tamanho) || "Único"}
                     </span>
                   );
                 })}
