@@ -222,7 +222,7 @@ export default function NovaLista() {
           <h2 style={styles.colTitle}>1. Cliente e validade</h2>
 
           <div style={styles.clienteEValidade}>
-            <div style={{ flex: 1, minWidth: 260, position: "relative" }}>
+            <div style={{ minWidth: 0, position: "relative" }}>
               {!clienteSelecionado && (
                 <>
                   <input
@@ -544,10 +544,10 @@ const styles = {
   },
   colTitle: { margin: 0, fontSize: 15 },
   clienteEValidade: {
-    display: "flex",
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
     gap: 20,
-    alignItems: "flex-start",
-    flexWrap: "wrap",
+    alignItems: "start",
   },
   validadeLabel: {
     display: "flex",
@@ -557,12 +557,15 @@ const styles = {
     color: COLORS.muted,
   },
   validadeInput: {
+    boxSizing: "border-box",
+    width: "100%",
     padding: "10px 12px",
     borderRadius: 8,
     border: `1px solid ${COLORS.border}`,
     fontSize: 14,
   },
   search: {
+    boxSizing: "border-box",
     padding: "10px 12px",
     borderRadius: 8,
     border: `1px solid ${COLORS.border}`,
@@ -653,12 +656,14 @@ const styles = {
     flexWrap: "wrap",
   },
   select: {
+    boxSizing: "border-box",
     padding: "10px 12px",
     borderRadius: 8,
     border: `1px solid ${COLORS.border}`,
     fontSize: 14,
   },
   aplicarInput: {
+    boxSizing: "border-box",
     padding: "10px 12px",
     borderRadius: 8,
     border: `1px solid ${COLORS.border}`,
@@ -687,6 +692,7 @@ const styles = {
   tr: { borderBottom: `1px solid ${COLORS.border}` },
   td: { padding: "8px 10px", fontSize: 14, verticalAlign: "middle" },
   priceInput: {
+    boxSizing: "border-box",
     width: 110,
     padding: "6px 8px",
     borderRadius: 6,
