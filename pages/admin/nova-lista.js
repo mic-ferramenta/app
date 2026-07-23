@@ -83,7 +83,10 @@ export default function NovaLista() {
   }
 
   const listaSelecionados = useMemo(
-    () => Object.values(gruposSelecionados),
+    () =>
+      Object.values(gruposSelecionados).sort((a, b) =>
+        (a.nome || "").localeCompare(b.nome || "", "pt-BR")
+      ),
     [gruposSelecionados]
   );
 
@@ -92,10 +95,16 @@ export default function NovaLista() {
   // --- passo 2: precificação --------------------------------------------
   // itensPreco: { [pai_id]: { custo, final } }
   const [itensPreco, setItensPreco] = useState({});
+  const [ordemManual, setOrdemManual] = useState([]); // array de pai_id, na ordem de exibição
   const [modoAplicar, setModoAplicar] = useState("percentual"); // percentual | valor
   const [valorAplicar, setValorAplicar] = useState("");
   const [gerando, setGerando] = useState(false);
   const [erroGeracao, setErroGeracao] = useState("");
+
+  const selecionadosOrdenados = useMemo(
+    () => ordemManual.map((id) => gruposSelecionados[id]).filter(Boolean),
+    [ordemManual, gruposSelecionados]
+  );
 
   function irParaPrecificacao() {
     const inicial = {};
@@ -104,7 +113,19 @@ export default function NovaLista() {
       inicial[g.id] = { custo: base, final: base };
     });
     setItensPreco(inicial);
+    setOrdemManual(listaSelecionados.map((g) => g.id)); // começa em ordem alfabética
     setStep("precificar");
+  }
+
+  function moverItem(paiId, direcao) {
+    setOrdemManual((prev) => {
+      const idx = prev.indexOf(paiId);
+      const novoIdx = idx + direcao;
+      if (idx === -1 || novoIdx < 0 || novoIdx >= prev.length) return prev;
+      const copy = [...prev];
+      [copy[idx], copy[novoIdx]] = [copy[novoIdx], copy[idx]];
+      return copy;
+    });
   }
 
   function aplicarEmMassa() {
@@ -139,7 +160,7 @@ export default function NovaLista() {
     setErroGeracao("");
     setGerando(true);
 
-    const items = listaSelecionados.map((g) => ({
+    const items = selecionadosOrdenados.map((g) => ({
       pai_id: g.id,
       preco_final: itensPreco[g.id]?.final,
     }));
@@ -178,6 +199,7 @@ export default function NovaLista() {
     setBuscaProduto("");
     setGruposSelecionados({});
     setItensPreco({});
+    setOrdemManual([]);
     setValorAplicar("");
     setResultado(null);
   }
@@ -189,7 +211,7 @@ export default function NovaLista() {
     return (
       <TelaPrecificacao
         cliente={clienteSelecionado}
-        selecionados={listaSelecionados}
+        selecionados={selecionadosOrdenados}
         itensPreco={itensPreco}
         modoAplicar={modoAplicar}
         setModoAplicar={setModoAplicar}
@@ -197,6 +219,7 @@ export default function NovaLista() {
         setValorAplicar={setValorAplicar}
         onAplicar={aplicarEmMassa}
         onFinalManual={handleFinalManual}
+        onMover={moverItem}
         onVoltar={() => setStep("selecionar")}
         onGerar={gerarLista}
         gerando={gerando}
@@ -356,6 +379,7 @@ function TelaPrecificacao({
   setValorAplicar,
   onAplicar,
   onFinalManual,
+  onMover,
   onVoltar,
   onGerar,
   gerando,
@@ -403,14 +427,35 @@ function TelaPrecificacao({
           <table style={styles.table}>
             <thead>
               <tr>
+                <th style={styles.th}>Ordem</th>
                 <th style={styles.th}>Produto</th>
                 <th style={styles.th}>Valor base</th>
                 <th style={styles.th}>Valor final</th>
               </tr>
             </thead>
             <tbody>
-              {selecionados.map((g) => (
+              {selecionados.map((g, index) => (
                 <tr key={g.id} style={styles.tr}>
+                  <td style={styles.td}>
+                    <div style={styles.ordemButtons}>
+                      <button
+                        onClick={() => onMover(g.id, -1)}
+                        disabled={index === 0}
+                        title="Mover para cima"
+                        style={styles.ordemButton}
+                      >
+                        ▲
+                      </button>
+                      <button
+                        onClick={() => onMover(g.id, 1)}
+                        disabled={index === selecionados.length - 1}
+                        title="Mover para baixo"
+                        style={styles.ordemButton}
+                      >
+                        ▼
+                      </button>
+                    </div>
+                  </td>
                   <td style={styles.td}>
                     <div style={{ fontWeight: 600 }}>{g.nome}</div>
                     <div style={{ fontSize: 12, color: COLORS.muted }}>{g.codigo}</div>
@@ -698,6 +743,17 @@ const styles = {
     borderRadius: 6,
     border: `1px solid ${COLORS.border}`,
     fontSize: 14,
+  },
+  ordemButtons: { display: "flex", flexDirection: "column", gap: 2 },
+  ordemButton: {
+    width: 26,
+    height: 22,
+    borderRadius: 4,
+    border: `1px solid ${COLORS.border}`,
+    background: "#fff",
+    color: COLORS.text,
+    fontSize: 11,
+    cursor: "pointer",
   },
   sucessoWrap: {
     minHeight: "calc(100vh - 64px)",

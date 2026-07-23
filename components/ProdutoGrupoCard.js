@@ -6,17 +6,11 @@
 // tamanho. O checkbox (quando existe) seleciona o produto pra lista e
 // não conflita com o clique de expandir (para propagação do evento).
 
-import { useState } from "react";
+import { useState, memo } from "react";
 import { COLORS } from "../lib/theme";
+import { limparTamanho, ordenarVariacoes } from "../lib/tamanhos";
 
-// Blindagem: tira um eventual prefixo "Tamanho:" que tenha vindo cru do
-// Bling, não importa a caixa ou os espaços ao redor.
-function limparTamanho(v) {
-  if (!v) return v;
-  return String(v).replace(/^\s*tamanho\s*:\s*/i, "").trim();
-}
-
-export default function ProdutoGrupoCard({
+function ProdutoGrupoCard({
   grupo,
   selecionado,
   onToggle,
@@ -24,7 +18,7 @@ export default function ProdutoGrupoCard({
 }) {
   const [expandido, setExpandido] = useState(false);
   const clicavel = typeof onToggle === "function";
-  const variacoes = grupo.variacoes || [];
+  const variacoes = ordenarVariacoes(grupo.variacoes);
 
   return (
     <div
@@ -170,3 +164,5 @@ const styles = {
     borderTop: `1px solid ${COLORS.border}`,
   },
 };
+
+export default memo(ProdutoGrupoCard);

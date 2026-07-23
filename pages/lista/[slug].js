@@ -6,20 +6,14 @@
 
 import { useState } from "react";
 import { supabaseAdmin } from "../../lib/supabaseAdmin";
+import { limparTamanho, ordenarVariacoes } from "../../lib/tamanhos";
 
 const LOGO_URL =
   "https://miccamisasdetime.com.br/cdn/shop/files/Design_sem_nome_-_2026-02-01T085034.319.png?v=1770226222&width=90";
 
-// Blindagem: tira um eventual prefixo "Tamanho:" que tenha vindo cru do
-// Bling, não importa a caixa ou os espaços ao redor.
-function limparTamanho(v) {
-  if (!v) return v;
-  return String(v).replace(/^\s*tamanho\s*:\s*/i, "").trim();
-}
-
 function ItemLista({ item }) {
   const [expandido, setExpandido] = useState(false);
-  const variacoes = item.variacoes || [];
+  const variacoes = ordenarVariacoes(item.variacoes);
 
   return (
     <div style={styles.card}>

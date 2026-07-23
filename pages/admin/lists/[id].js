@@ -1,5 +1,5 @@
 // pages/admin/lists/[id].js
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { requireAdmin } from "../../../lib/adminSession";
 import { supabaseAdmin } from "../../../lib/supabaseAdmin";
 import { COLORS } from "../../../lib/theme";
@@ -8,13 +8,11 @@ const fmtMoeda = (v) =>
   Number(v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
 export default function ManageList({ lista, cliente, itensIniciais, listUrl }) {
-  const [itens, setItens] = useState(itensIniciais); // { [group_id]: { nome, codigo, preco } }
+  const [itens, setItens] = useState(itensIniciais); // array: [{ pai_id, nome, codigo, preco, ordem }]
   const [copiado, setCopiado] = useState(false);
   const [busca, setBusca] = useState("");
   const [resultadosBusca, setResultadosBusca] = useState([]);
   const [salvandoId, setSalvandoId] = useState(null);
-
-  const itensLista = useMemo(() => Object.entries(itens), [itens]);
 
   function handleCopyLink() {
     navigator.clipboard.writeText(listUrl);
@@ -35,52 +33,90 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl }) {
 
   async function adicionarProduto(grupo) {
     setSalvandoId(grupo.id);
+    const novaOrdem = itens.length; // vai pro final da lista
+    const precoInicial = grupo.preco_venda || 0;
+
     await fetch("/api/admin/price-list-items", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         price_list_id: lista.id,
         pai_id: grupo.id,
-        preco: grupo.preco_venda || 0,
+        preco: precoInicial,
+        ordem: novaOrdem,
       }),
     });
-    setItens((prev) => ({
+
+    setItens((prev) => [
       ...prev,
-      [grupo.id]: { nome: grupo.nome, codigo: grupo.codigo, preco: String(grupo.preco_venda || 0) },
-    }));
+      {
+        pai_id: grupo.id,
+        nome: grupo.nome,
+        codigo: grupo.codigo,
+        preco: String(precoInicial),
+        ordem: novaOrdem,
+      },
+    ]);
     setSalvandoId(null);
     setBusca("");
     setResultadosBusca([]);
   }
 
-  function handlePriceChange(groupId, value) {
-    setItens((prev) => ({ ...prev, [groupId]: { ...prev[groupId], preco: value } }));
+  function handlePriceChange(paiId, value) {
+    setItens((prev) =>
+      prev.map((i) => (i.pai_id === paiId ? { ...i, preco: value } : i))
+    );
   }
 
-  async function salvarPreco(groupId) {
-    const preco = itens[groupId]?.preco;
-    if (preco === undefined || preco === "") return;
-    setSalvandoId(groupId);
+  async function salvarPreco(paiId) {
+    const item = itens.find((i) => i.pai_id === paiId);
+    if (!item || item.preco === undefined || item.preco === "") return;
+    setSalvandoId(paiId);
     await fetch("/api/admin/price-list-items", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ price_list_id: lista.id, pai_id: groupId, preco }),
+      body: JSON.stringify({ price_list_id: lista.id, pai_id: paiId, preco: item.preco }),
     });
     setSalvandoId(null);
   }
 
-  async function removerItem(groupId) {
-    setSalvandoId(groupId);
+  async function removerItem(paiId) {
+    setSalvandoId(paiId);
     await fetch("/api/admin/price-list-items", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ price_list_id: lista.id, pai_id: groupId }),
+      body: JSON.stringify({ price_list_id: lista.id, pai_id: paiId }),
     });
-    setItens((prev) => {
-      const copy = { ...prev };
-      delete copy[groupId];
-      return copy;
-    });
+    setItens((prev) => prev.filter((i) => i.pai_id !== paiId));
+    setSalvandoId(null);
+  }
+
+  async function moverItem(paiId, direcao) {
+    const idx = itens.findIndex((i) => i.pai_id === paiId);
+    const novoIdx = idx + direcao;
+    if (idx === -1 || novoIdx < 0 || novoIdx >= itens.length) return;
+
+    const reordenados = [...itens];
+    [reordenados[idx], reordenados[novoIdx]] = [reordenados[novoIdx], reordenados[idx]];
+    // recalcula a ordem sequencial (0, 1, 2, ...) pra bater com a posição na tela
+    const comOrdemNova = reordenados.map((item, i) => ({ ...item, ordem: i }));
+    setItens(comOrdemNova);
+
+    setSalvandoId(paiId);
+    const a = comOrdemNova[idx < novoIdx ? idx : novoIdx];
+    const b = comOrdemNova[idx < novoIdx ? novoIdx : idx];
+    await Promise.all([
+      fetch("/api/admin/price-list-items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ price_list_id: lista.id, pai_id: a.pai_id, ordem: a.ordem }),
+      }),
+      fetch("/api/admin/price-list-items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ price_list_id: lista.id, pai_id: b.pai_id, ordem: b.ordem }),
+      }),
+    ]);
     setSalvandoId(null);
   }
 
@@ -126,14 +162,35 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl }) {
         <table style={styles.table}>
           <thead>
             <tr>
+              <th style={styles.th}>Ordem</th>
               <th style={styles.th}>Produto</th>
               <th style={styles.th}>Preço na lista</th>
               <th style={styles.th}></th>
             </tr>
           </thead>
           <tbody>
-            {itensLista.map(([groupId, item]) => (
-              <tr key={groupId} style={styles.tr}>
+            {itens.map((item, index) => (
+              <tr key={item.pai_id} style={styles.tr}>
+                <td style={styles.td}>
+                  <div style={styles.ordemButtons}>
+                    <button
+                      onClick={() => moverItem(item.pai_id, -1)}
+                      disabled={index === 0 || salvandoId === item.pai_id}
+                      title="Mover para cima"
+                      style={styles.ordemButton}
+                    >
+                      ▲
+                    </button>
+                    <button
+                      onClick={() => moverItem(item.pai_id, 1)}
+                      disabled={index === itens.length - 1 || salvandoId === item.pai_id}
+                      title="Mover para baixo"
+                      style={styles.ordemButton}
+                    >
+                      ▼
+                    </button>
+                  </div>
+                </td>
                 <td style={styles.td}>
                   <div style={{ fontWeight: 600 }}>{item.nome}</div>
                   <div style={{ fontSize: 12, color: COLORS.muted }}>{item.codigo}</div>
@@ -144,22 +201,22 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl }) {
                     step="0.01"
                     min="0"
                     value={item.preco ?? ""}
-                    onChange={(e) => handlePriceChange(groupId, e.target.value)}
+                    onChange={(e) => handlePriceChange(item.pai_id, e.target.value)}
                     style={styles.priceInput}
                   />
                 </td>
                 <td style={styles.td}>
                   <div style={{ display: "flex", gap: 6 }}>
                     <button
-                      onClick={() => salvarPreco(groupId)}
-                      disabled={salvandoId === groupId}
+                      onClick={() => salvarPreco(item.pai_id)}
+                      disabled={salvandoId === item.pai_id}
                       style={styles.saveButton}
                     >
                       Salvar
                     </button>
                     <button
-                      onClick={() => removerItem(groupId)}
-                      disabled={salvandoId === groupId}
+                      onClick={() => removerItem(item.pai_id)}
+                      disabled={salvandoId === item.pai_id}
                       style={styles.removeButton}
                     >
                       Remover
@@ -168,9 +225,9 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl }) {
                 </td>
               </tr>
             ))}
-            {itensLista.length === 0 && (
+            {itens.length === 0 && (
               <tr>
-                <td style={styles.td} colSpan={3}>
+                <td style={styles.td} colSpan={4}>
                   Nenhum item nesta lista ainda.
                 </td>
               </tr>
@@ -199,18 +256,30 @@ export async function getServerSideProps({ req, params }) {
 
   const { data: itensRaw } = await supabaseAdmin
     .from("price_list_items")
-    .select("preco, grupo:pai_id ( id, nome, codigo )")
+    .select("preco, ordem, grupo:pai_id ( id, nome, codigo )")
     .eq("price_list_id", id);
 
-  const itensIniciais = {};
-  (itensRaw || []).forEach((i) => {
-    if (!i.grupo) return;
-    itensIniciais[i.grupo.id] = {
-      nome: i.grupo.nome,
-      codigo: i.grupo.codigo,
-      preco: String(i.preco),
-    };
-  });
+  // Ordena pela "ordem" salva; itens antigos sem ordem definida (null)
+  // caem no fim, ordenados por nome -- e a primeira vez que alguém
+  // mexer nas setas já fixa uma ordem sequencial de verdade.
+  const itensOrdenados = (itensRaw || [])
+    .filter((i) => i.grupo)
+    .sort((a, b) => {
+      if (a.ordem == null && b.ordem == null) {
+        return a.grupo.nome.localeCompare(b.grupo.nome, "pt-BR");
+      }
+      if (a.ordem == null) return 1;
+      if (b.ordem == null) return -1;
+      return a.ordem - b.ordem;
+    });
+
+  const itensIniciais = itensOrdenados.map((i, index) => ({
+    pai_id: i.grupo.id,
+    nome: i.grupo.nome,
+    codigo: i.grupo.codigo,
+    preco: String(i.preco),
+    ordem: i.ordem ?? index,
+  }));
 
   const proto = req.headers["x-forwarded-proto"] || "https";
   const baseUrl = `${proto}://${req.headers.host}`;
@@ -257,6 +326,7 @@ const styles = {
   backLink: { color: COLORS.accent, fontSize: 14, textDecoration: "none" },
   addBox: { maxWidth: 1000, margin: "0 auto 16px", position: "relative" },
   search: {
+    boxSizing: "border-box",
     width: "100%",
     padding: "10px 14px",
     borderRadius: 8,
@@ -294,11 +364,23 @@ const styles = {
   tr: { borderBottom: `1px solid ${COLORS.border}` },
   td: { padding: "8px 10px", fontSize: 14, verticalAlign: "middle" },
   priceInput: {
+    boxSizing: "border-box",
     width: 110,
     padding: "6px 8px",
     borderRadius: 6,
     border: `1px solid ${COLORS.border}`,
     fontSize: 14,
+  },
+  ordemButtons: { display: "flex", flexDirection: "column", gap: 2 },
+  ordemButton: {
+    width: 26,
+    height: 22,
+    borderRadius: 4,
+    border: `1px solid ${COLORS.border}`,
+    background: "#fff",
+    color: COLORS.text,
+    fontSize: 11,
+    cursor: "pointer",
   },
   saveButton: {
     padding: "6px 10px",
