@@ -100,8 +100,8 @@ export default function NovaLista() {
   function irParaPrecificacao() {
     const inicial = {};
     listaSelecionados.forEach((g) => {
-      const custo = Number(g.preco_custo || 0);
-      inicial[g.id] = { custo, final: g.preco_venda ?? custo };
+      const base = Number(g.preco_venda ?? g.preco_custo ?? 0);
+      inicial[g.id] = { custo: base, final: base };
     });
     setItensPreco(inicial);
     setStep("precificar");
@@ -280,6 +280,7 @@ export default function NovaLista() {
             </div>
 
             <label style={styles.validadeLabel}>
+              Validade da lista
               <input
                 type="date"
                 value={vencimento}
@@ -382,8 +383,8 @@ function TelaPrecificacao({
             onChange={(e) => setModoAplicar(e.target.value)}
             style={styles.select}
           >
-            <option value="percentual">% sobre o custo</option>
-            <option value="valor">R$ sobre o custo</option>
+            <option value="percentual">% sobre o valor base</option>
+            <option value="valor">R$ sobre o valor base</option>
           </select>
           <input
             type="number"
@@ -403,7 +404,7 @@ function TelaPrecificacao({
             <thead>
               <tr>
                 <th style={styles.th}>Produto</th>
-                <th style={styles.th}>Custo</th>
+                <th style={styles.th}>Valor base</th>
                 <th style={styles.th}>Valor final</th>
               </tr>
             </thead>
