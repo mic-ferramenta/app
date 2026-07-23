@@ -11,7 +11,7 @@ import { limparTamanho, ordenarVariacoes } from "../../lib/tamanhos";
 const LOGO_URL =
   "https://miccamisasdetime.com.br/cdn/shop/files/Design_sem_nome_-_2026-02-01T085034.319.png?v=1770226222&width=90";
 
-function ItemLista({ item }) {
+function ItemLista({ item, mostrarPreco }) {
   const [expandido, setExpandido] = useState(false);
   const variacoes = ordenarVariacoes(item.variacoes);
 
@@ -55,12 +55,14 @@ function ItemLista({ item }) {
             })}
           </div>
 
-          <p style={styles.price}>
-            {Number(item.preco).toLocaleString("pt-BR", {
-              style: "currency",
-              currency: "BRL",
-            })}
-          </p>
+          {mostrarPreco && (
+            <p style={styles.price}>
+              {Number(item.preco).toLocaleString("pt-BR", {
+                style: "currency",
+                currency: "BRL",
+              })}
+            </p>
+          )}
 
           <span style={styles.expandHint}>
             {expandido ? "▲ ocultar estoque por tamanho" : "▼ ver estoque por tamanho"}
@@ -99,7 +101,7 @@ function ItemLista({ item }) {
   );
 }
 
-export default function ListaDePrecos({ cliente, itens }) {
+export default function ListaDePrecos({ cliente, itens, mostrarPreco }) {
   return (
     <div style={styles.page}>
       <div style={styles.tarja}>
@@ -120,7 +122,7 @@ export default function ListaDePrecos({ cliente, itens }) {
 
         <main style={styles.grid}>
           {itens.map((item) => (
-            <ItemLista key={item.id} item={item} />
+            <ItemLista key={item.id} item={item} mostrarPreco={mostrarPreco} />
           ))}
 
           {itens.length === 0 && (
@@ -137,7 +139,7 @@ export async function getServerSideProps({ params }) {
 
   const { data: lista } = await supabaseAdmin
     .from("price_lists")
-    .select("id, ativo, titulo, client:client_id ( nome )")
+    .select("id, ativo, titulo, mostrar_preco, client:client_id ( nome )")
     .eq("slug", slug)
     .eq("ativo", true)
     .single();
@@ -166,7 +168,11 @@ export async function getServerSideProps({ params }) {
     }));
 
   return {
-    props: { cliente: { nome: lista.client?.nome || lista.titulo }, itens },
+    props: {
+      cliente: { nome: lista.client?.nome || lista.titulo },
+      itens,
+      mostrarPreco: lista.mostrar_preco,
+    },
   };
 }
 

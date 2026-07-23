@@ -29,6 +29,7 @@ export default function NovaLista() {
   const [usarTitulo, setUsarTitulo] = useState(false);
   const [titulo, setTitulo] = useState("");
   const [vencimento, setVencimento] = useState("");
+  const [mostrarPreco, setMostrarPreco] = useState(true);
 
   const [buscaProduto, setBuscaProduto] = useState("");
   const [grupos, setGrupos] = useState([]);
@@ -180,6 +181,7 @@ export default function NovaLista() {
           : undefined,
         titulo: clienteSelecionado ? undefined : titulo,
         vencimento: vencimento || null,
+        mostrar_preco: mostrarPreco,
         items,
       }),
     });
@@ -204,6 +206,7 @@ export default function NovaLista() {
     setUsarTitulo(false);
     setTitulo("");
     setVencimento("");
+    setMostrarPreco(true);
     setBuscaProduto("");
     setGruposSelecionados({});
     setItensPreco({});
@@ -219,6 +222,7 @@ export default function NovaLista() {
     return (
       <TelaPrecificacao
         nomeExibicao={nomeParaExibicao}
+        mostrarPreco={mostrarPreco}
         selecionados={selecionadosOrdenados}
         itensPreco={itensPreco}
         modoAplicar={modoAplicar}
@@ -343,6 +347,15 @@ export default function NovaLista() {
                 style={styles.validadeInput}
               />
             </label>
+
+            <label style={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={!mostrarPreco}
+                onChange={(e) => setMostrarPreco(!e.target.checked)}
+              />
+              Gerar sem preço (só catálogo/disponibilidade)
+            </label>
           </div>
         </section>
 
@@ -403,6 +416,7 @@ export default function NovaLista() {
 
 function TelaPrecificacao({
   nomeExibicao,
+  mostrarPreco,
   selecionados,
   itensPreco,
   modoAplicar,
@@ -427,33 +441,35 @@ function TelaPrecificacao({
       <div style={styles.content}>
         <header style={styles.header}>
           <div>
-            <h1 style={styles.title}>Precificar lista</h1>
+            <h1 style={styles.title}>{mostrarPreco ? "Precificar lista" : "Ordenar itens da lista"}</h1>
             <p style={styles.clienteHeader}>{nomeExibicao}</p>
           </div>
           <button onClick={onVoltar} style={styles.backLinkButton}>← Voltar</button>
         </header>
 
-        <div style={styles.aplicarBox}>
-          <select
-            value={modoAplicar}
-            onChange={(e) => setModoAplicar(e.target.value)}
-            style={styles.select}
-          >
-            <option value="percentual">% sobre o valor base</option>
-            <option value="valor">R$ sobre o valor base</option>
-          </select>
-          <input
-            type="number"
-            step="0.01"
-            placeholder={modoAplicar === "percentual" ? "ex: 100" : "ex: 25,00"}
-            value={valorAplicar}
-            onChange={(e) => setValorAplicar(e.target.value)}
-            style={styles.aplicarInput}
-          />
-          <button onClick={onAplicar} style={styles.aplicarButton}>
-            Aplicar a todos
-          </button>
-        </div>
+        {mostrarPreco && (
+          <div style={styles.aplicarBox}>
+            <select
+              value={modoAplicar}
+              onChange={(e) => setModoAplicar(e.target.value)}
+              style={styles.select}
+            >
+              <option value="percentual">% sobre o valor base</option>
+              <option value="valor">R$ sobre o valor base</option>
+            </select>
+            <input
+              type="number"
+              step="0.01"
+              placeholder={modoAplicar === "percentual" ? "ex: 100" : "ex: 25,00"}
+              value={valorAplicar}
+              onChange={(e) => setValorAplicar(e.target.value)}
+              style={styles.aplicarInput}
+            />
+            <button onClick={onAplicar} style={styles.aplicarButton}>
+              Aplicar a todos
+            </button>
+          </div>
+        )}
 
         <main style={styles.tableWrap}>
           <table style={styles.table}>
@@ -461,9 +477,13 @@ function TelaPrecificacao({
               <tr>
                 <th style={styles.th}>Ordem</th>
                 <th style={styles.th}>Produto</th>
-                <th style={styles.th}>Valor base</th>
-                <th style={styles.th}>Valor final</th>
-                <th style={styles.th}>% de lucro</th>
+                {mostrarPreco && (
+                  <>
+                    <th style={styles.th}>Valor base</th>
+                    <th style={styles.th}>Valor final</th>
+                    <th style={styles.th}>% de lucro</th>
+                  </>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -498,32 +518,36 @@ function TelaPrecificacao({
                       <div style={{ fontWeight: 600 }}>{g.nome}</div>
                       <div style={{ fontSize: 12, color: COLORS.muted }}>{g.codigo}</div>
                     </td>
-                    <td style={styles.td}>{fmtMoeda(itensPreco[g.id]?.custo)}</td>
-                    <td style={styles.td}>
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        value={itensPreco[g.id]?.final ?? ""}
-                        onChange={(e) => onFinalManual(g.id, e.target.value)}
-                        style={styles.priceInput}
-                      />
-                    </td>
-                    <td style={styles.td}>
-                      {lucro === null ? (
-                        <span style={{ color: COLORS.muted }}>-</span>
-                      ) : (
-                        <span
-                          style={{
-                            ...styles.lucroBadge,
-                            color: lucro > 0 ? COLORS.stockOk : COLORS.danger,
-                            background: lucro > 0 ? COLORS.stockOkBg : "#fee2e2",
-                          }}
-                        >
-                          {lucro.toFixed(1)}%
-                        </span>
-                      )}
-                    </td>
+                    {mostrarPreco && (
+                      <>
+                        <td style={styles.td}>{fmtMoeda(itensPreco[g.id]?.custo)}</td>
+                        <td style={styles.td}>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={itensPreco[g.id]?.final ?? ""}
+                            onChange={(e) => onFinalManual(g.id, e.target.value)}
+                            style={styles.priceInput}
+                          />
+                        </td>
+                        <td style={styles.td}>
+                          {lucro === null ? (
+                            <span style={{ color: COLORS.muted }}>-</span>
+                          ) : (
+                            <span
+                              style={{
+                                ...styles.lucroBadge,
+                                color: lucro > 0 ? COLORS.stockOk : COLORS.danger,
+                                background: lucro > 0 ? COLORS.stockOkBg : "#fee2e2",
+                              }}
+                            >
+                              {lucro.toFixed(1)}%
+                            </span>
+                          )}
+                        </td>
+                      </>
+                    )}
                   </tr>
                 );
               })}
@@ -673,6 +697,14 @@ const styles = {
     borderRadius: 8,
     border: `1px solid ${COLORS.border}`,
     fontSize: 14,
+  },
+  checkboxLabel: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    fontSize: 13,
+    color: COLORS.text,
+    marginTop: 4,
   },
   search: {
     boxSizing: "border-box",

@@ -67,7 +67,7 @@ export default async function handler(req, res) {
 
     let query = supabaseAdmin
       .from("price_lists")
-      .select("id, slug, created_at, vencimento, ativo, titulo, client:client_id ( id, nome )")
+      .select("id, slug, created_at, vencimento, ativo, titulo, mostrar_preco, client:client_id ( id, nome )")
       .order("created_at", { ascending: false });
 
     if (data_inicio) query = query.gte("created_at", `${data_inicio}T00:00:00`);
@@ -89,7 +89,7 @@ export default async function handler(req, res) {
   }
 
   if (req.method === "POST") {
-    const { bling_customer, titulo, items, vencimento } = req.body || {};
+    const { bling_customer, titulo, items, vencimento, mostrar_preco } = req.body || {};
 
     const usaTitulo = !bling_customer?.bling_id;
 
@@ -130,6 +130,7 @@ export default async function handler(req, res) {
           slug,
           ativo: true,
           vencimento: vencimento || null,
+          mostrar_preco: mostrar_preco !== false,
         })
         .select("id, slug")
         .single();

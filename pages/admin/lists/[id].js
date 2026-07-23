@@ -7,7 +7,7 @@ import { COLORS } from "../../../lib/theme";
 const fmtMoeda = (v) =>
   Number(v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
-export default function ManageList({ lista, cliente, itensIniciais, listUrl }) {
+export default function ManageList({ lista, cliente, itensIniciais, listUrl, mostrarPreco }) {
   const [itens, setItens] = useState(itensIniciais); // array: [{ pai_id, nome, codigo, custo, preco, ordem }]
   const [copiado, setCopiado] = useState(false);
   const [busca, setBusca] = useState("");
@@ -185,34 +185,36 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl }) {
         )}
       </div>
 
-      <div style={styles.aplicarBox}>
-        <select
-          value={modoAplicar}
-          onChange={(e) => setModoAplicar(e.target.value)}
-          style={styles.select}
-        >
-          <option value="percentual">% sobre o valor base</option>
-          <option value="valor">R$ sobre o valor base</option>
-        </select>
-        <input
-          type="number"
-          step="0.01"
-          placeholder={modoAplicar === "percentual" ? "ex: 100" : "ex: 25,00"}
-          value={valorAplicar}
-          onChange={(e) => setValorAplicar(e.target.value)}
-          style={styles.aplicarInput}
-        />
-        <button onClick={aplicarEmMassa} style={styles.aplicarButton}>
-          Aplicar a todos
-        </button>
-        <button
-          onClick={salvarTodos}
-          disabled={salvandoTudo}
-          style={styles.salvarTudoButton}
-        >
-          {salvandoTudo ? "Salvando..." : "Salvar alterações"}
-        </button>
-      </div>
+      {mostrarPreco && (
+        <div style={styles.aplicarBox}>
+          <select
+            value={modoAplicar}
+            onChange={(e) => setModoAplicar(e.target.value)}
+            style={styles.select}
+          >
+            <option value="percentual">% sobre o valor base</option>
+            <option value="valor">R$ sobre o valor base</option>
+          </select>
+          <input
+            type="number"
+            step="0.01"
+            placeholder={modoAplicar === "percentual" ? "ex: 100" : "ex: 25,00"}
+            value={valorAplicar}
+            onChange={(e) => setValorAplicar(e.target.value)}
+            style={styles.aplicarInput}
+          />
+          <button onClick={aplicarEmMassa} style={styles.aplicarButton}>
+            Aplicar a todos
+          </button>
+          <button
+            onClick={salvarTodos}
+            disabled={salvandoTudo}
+            style={styles.salvarTudoButton}
+          >
+            {salvandoTudo ? "Salvando..." : "Salvar alterações"}
+          </button>
+        </div>
+      )}
 
       <main style={styles.tableWrap}>
         <table style={styles.table}>
@@ -220,9 +222,13 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl }) {
             <tr>
               <th style={styles.th}>Ordem</th>
               <th style={styles.th}>Produto</th>
-              <th style={styles.th}>Valor base</th>
-              <th style={styles.th}>Preço na lista</th>
-              <th style={styles.th}>% de lucro</th>
+              {mostrarPreco && (
+                <>
+                  <th style={styles.th}>Valor base</th>
+                  <th style={styles.th}>Preço na lista</th>
+                  <th style={styles.th}>% de lucro</th>
+                </>
+              )}
               <th style={styles.th}></th>
             </tr>
           </thead>
@@ -258,32 +264,36 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl }) {
                     <div style={{ fontWeight: 600 }}>{item.nome}</div>
                     <div style={{ fontSize: 12, color: COLORS.muted }}>{item.codigo}</div>
                   </td>
-                  <td style={styles.td}>{fmtMoeda(item.custo)}</td>
-                  <td style={styles.td}>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={item.preco ?? ""}
-                      onChange={(e) => handlePriceChange(item.pai_id, e.target.value)}
-                      style={styles.priceInput}
-                    />
-                  </td>
-                  <td style={styles.td}>
-                    {lucro === null ? (
-                      <span style={{ color: COLORS.muted }}>-</span>
-                    ) : (
-                      <span
-                        style={{
-                          ...styles.lucroBadge,
-                          color: lucro > 0 ? COLORS.stockOk : COLORS.danger,
-                          background: lucro > 0 ? COLORS.stockOkBg : "#fee2e2",
-                        }}
-                      >
-                        {lucro.toFixed(1)}%
-                      </span>
-                    )}
-                  </td>
+                  {mostrarPreco && (
+                    <>
+                      <td style={styles.td}>{fmtMoeda(item.custo)}</td>
+                      <td style={styles.td}>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={item.preco ?? ""}
+                          onChange={(e) => handlePriceChange(item.pai_id, e.target.value)}
+                          style={styles.priceInput}
+                        />
+                      </td>
+                      <td style={styles.td}>
+                        {lucro === null ? (
+                          <span style={{ color: COLORS.muted }}>-</span>
+                        ) : (
+                          <span
+                            style={{
+                              ...styles.lucroBadge,
+                              color: lucro > 0 ? COLORS.stockOk : COLORS.danger,
+                              background: lucro > 0 ? COLORS.stockOkBg : "#fee2e2",
+                            }}
+                          >
+                            {lucro.toFixed(1)}%
+                          </span>
+                        )}
+                      </td>
+                    </>
+                  )}
                   <td style={styles.td}>
                     <button
                       onClick={() => removerItem(item.pai_id)}
@@ -298,7 +308,7 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl }) {
             })}
             {itens.length === 0 && (
               <tr>
-                <td style={styles.td} colSpan={6}>
+                <td style={styles.td} colSpan={mostrarPreco ? 6 : 3}>
                   Nenhum item nesta lista ainda.
                 </td>
               </tr>
@@ -319,7 +329,7 @@ export async function getServerSideProps({ req, params }) {
 
   const { data: lista } = await supabaseAdmin
     .from("price_lists")
-    .select("id, slug, titulo, client:client_id ( id, nome )")
+    .select("id, slug, titulo, mostrar_preco, client:client_id ( id, nome )")
     .eq("id", id)
     .single();
 
@@ -363,6 +373,7 @@ export async function getServerSideProps({ req, params }) {
       cliente: lista.client || { nome: lista.titulo },
       itensIniciais,
       listUrl: `${baseUrl}/lista/${lista.slug}`,
+      mostrarPreco: lista.mostrar_preco,
     },
   };
 }
