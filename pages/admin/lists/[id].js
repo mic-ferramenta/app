@@ -8,11 +8,14 @@ const fmtMoeda = (v) =>
   Number(v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
 export default function ManageList({ lista, cliente, itensIniciais, listUrl }) {
-  const [itens, setItens] = useState(itensIniciais); // array: [{ pai_id, nome, codigo, preco, ordem }]
+  const [itens, setItens] = useState(itensIniciais); // array: [{ pai_id, nome, codigo, custo, preco, ordem }]
   const [copiado, setCopiado] = useState(false);
   const [busca, setBusca] = useState("");
   const [resultadosBusca, setResultadosBusca] = useState([]);
   const [salvandoId, setSalvandoId] = useState(null);
+  const [salvandoTudo, setSalvandoTudo] = useState(false);
+  const [modoAplicar, setModoAplicar] = useState("percentual"); // percentual | valor
+  const [valorAplicar, setValorAplicar] = useState("");
 
   function handleCopyLink() {
     navigator.clipboard.writeText(listUrl);
@@ -33,8 +36,8 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl }) {
 
   async function adicionarProduto(grupo) {
     setSalvandoId(grupo.id);
-    const novaOrdem = itens.length; // vai pro final da lista
-    const precoInicial = grupo.preco_venda || 0;
+    const novaOrdem = itens.length;
+    const custoBase = Number(grupo.preco_venda ?? grupo.preco_custo ?? 0);
 
     await fetch("/api/admin/price-list-items", {
       method: "POST",
@@ -42,7 +45,7 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl }) {
       body: JSON.stringify({
         price_list_id: lista.id,
         pai_id: grupo.id,
-        preco: precoInicial,
+        preco: custoBase,
         ordem: novaOrdem,
       }),
     });
@@ -53,7 +56,8 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl }) {
         pai_id: grupo.id,
         nome: grupo.nome,
         codigo: grupo.codigo,
-        preco: String(precoInicial),
+        custo: custoBase,
+        preco: String(custoBase),
         ordem: novaOrdem,
       },
     ]);
@@ -68,16 +72,40 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl }) {
     );
   }
 
-  async function salvarPreco(paiId) {
-    const item = itens.find((i) => i.pai_id === paiId);
-    if (!item || item.preco === undefined || item.preco === "") return;
-    setSalvandoId(paiId);
-    await fetch("/api/admin/price-list-items", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ price_list_id: lista.id, pai_id: paiId, preco: item.preco }),
-    });
-    setSalvandoId(null);
+  // Aplica % ou R$ em cima do valor base de TODOS os itens da lista de
+  // uma vez -- só muda localmente; "Salvar alterações" que grava.
+  function aplicarEmMassa() {
+    const valor = Number(valorAplicar);
+    if (Number.isNaN(valor)) return;
+
+    setItens((prev) =>
+      prev.map((item) => {
+        const custo = Number(item.custo || 0);
+        const novoPreco =
+          modoAplicar === "percentual"
+            ? custo + custo * (valor / 100)
+            : custo + valor;
+        return { ...item, preco: String(Number(novoPreco.toFixed(2))) };
+      })
+    );
+  }
+
+  async function salvarTodos() {
+    setSalvandoTudo(true);
+    await Promise.all(
+      itens.map((item) =>
+        fetch("/api/admin/price-list-items", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            price_list_id: lista.id,
+            pai_id: item.pai_id,
+            preco: item.preco,
+          }),
+        })
+      )
+    );
+    setSalvandoTudo(false);
   }
 
   async function removerItem(paiId) {
@@ -98,7 +126,6 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl }) {
 
     const reordenados = [...itens];
     [reordenados[idx], reordenados[novoIdx]] = [reordenados[novoIdx], reordenados[idx]];
-    // recalcula a ordem sequencial (0, 1, 2, ...) pra bater com a posição na tela
     const comOrdemNova = reordenados.map((item, i) => ({ ...item, ordem: i }));
     setItens(comOrdemNova);
 
@@ -158,62 +185,106 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl }) {
         )}
       </div>
 
+      <div style={styles.aplicarBox}>
+        <select
+          value={modoAplicar}
+          onChange={(e) => setModoAplicar(e.target.value)}
+          style={styles.select}
+        >
+          <option value="percentual">% sobre o valor base</option>
+          <option value="valor">R$ sobre o valor base</option>
+        </select>
+        <input
+          type="number"
+          step="0.01"
+          placeholder={modoAplicar === "percentual" ? "ex: 100" : "ex: 25,00"}
+          value={valorAplicar}
+          onChange={(e) => setValorAplicar(e.target.value)}
+          style={styles.aplicarInput}
+        />
+        <button onClick={aplicarEmMassa} style={styles.aplicarButton}>
+          Aplicar a todos
+        </button>
+        <button
+          onClick={salvarTodos}
+          disabled={salvandoTudo}
+          style={styles.salvarTudoButton}
+        >
+          {salvandoTudo ? "Salvando..." : "Salvar alterações"}
+        </button>
+      </div>
+
       <main style={styles.tableWrap}>
         <table style={styles.table}>
           <thead>
             <tr>
               <th style={styles.th}>Ordem</th>
               <th style={styles.th}>Produto</th>
+              <th style={styles.th}>Valor base</th>
               <th style={styles.th}>Preço na lista</th>
+              <th style={styles.th}>% de lucro</th>
               <th style={styles.th}></th>
             </tr>
           </thead>
           <tbody>
-            {itens.map((item, index) => (
-              <tr key={item.pai_id} style={styles.tr}>
-                <td style={styles.td}>
-                  <div style={styles.ordemButtons}>
-                    <button
-                      onClick={() => moverItem(item.pai_id, -1)}
-                      disabled={index === 0 || salvandoId === item.pai_id}
-                      title="Mover para cima"
-                      style={styles.ordemButton}
-                    >
-                      ▲
-                    </button>
-                    <button
-                      onClick={() => moverItem(item.pai_id, 1)}
-                      disabled={index === itens.length - 1 || salvandoId === item.pai_id}
-                      title="Mover para baixo"
-                      style={styles.ordemButton}
-                    >
-                      ▼
-                    </button>
-                  </div>
-                </td>
-                <td style={styles.td}>
-                  <div style={{ fontWeight: 600 }}>{item.nome}</div>
-                  <div style={{ fontSize: 12, color: COLORS.muted }}>{item.codigo}</div>
-                </td>
-                <td style={styles.td}>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={item.preco ?? ""}
-                    onChange={(e) => handlePriceChange(item.pai_id, e.target.value)}
-                    style={styles.priceInput}
-                  />
-                </td>
-                <td style={styles.td}>
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <button
-                      onClick={() => salvarPreco(item.pai_id)}
-                      disabled={salvandoId === item.pai_id}
-                      style={styles.saveButton}
-                    >
-                      Salvar
-                    </button>
+            {itens.map((item, index) => {
+              const custo = Number(item.custo || 0);
+              const preco = Number(item.preco || 0);
+              const lucro = custo > 0 ? ((preco - custo) / custo) * 100 : null;
+
+              return (
+                <tr key={item.pai_id} style={styles.tr}>
+                  <td style={styles.td}>
+                    <div style={styles.ordemButtons}>
+                      <button
+                        onClick={() => moverItem(item.pai_id, -1)}
+                        disabled={index === 0 || salvandoId === item.pai_id}
+                        title="Mover para cima"
+                        style={styles.ordemButton}
+                      >
+                        ▲
+                      </button>
+                      <button
+                        onClick={() => moverItem(item.pai_id, 1)}
+                        disabled={index === itens.length - 1 || salvandoId === item.pai_id}
+                        title="Mover para baixo"
+                        style={styles.ordemButton}
+                      >
+                        ▼
+                      </button>
+                    </div>
+                  </td>
+                  <td style={styles.td}>
+                    <div style={{ fontWeight: 600 }}>{item.nome}</div>
+                    <div style={{ fontSize: 12, color: COLORS.muted }}>{item.codigo}</div>
+                  </td>
+                  <td style={styles.td}>{fmtMoeda(item.custo)}</td>
+                  <td style={styles.td}>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={item.preco ?? ""}
+                      onChange={(e) => handlePriceChange(item.pai_id, e.target.value)}
+                      style={styles.priceInput}
+                    />
+                  </td>
+                  <td style={styles.td}>
+                    {lucro === null ? (
+                      <span style={{ color: COLORS.muted }}>-</span>
+                    ) : (
+                      <span
+                        style={{
+                          ...styles.lucroBadge,
+                          color: lucro > 0 ? COLORS.stockOk : COLORS.danger,
+                          background: lucro > 0 ? COLORS.stockOkBg : "#fee2e2",
+                        }}
+                      >
+                        {lucro.toFixed(1)}%
+                      </span>
+                    )}
+                  </td>
+                  <td style={styles.td}>
                     <button
                       onClick={() => removerItem(item.pai_id)}
                       disabled={salvandoId === item.pai_id}
@@ -221,13 +292,13 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl }) {
                     >
                       Remover
                     </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
+                  </td>
+                </tr>
+              );
+            })}
             {itens.length === 0 && (
               <tr>
-                <td style={styles.td} colSpan={4}>
+                <td style={styles.td} colSpan={6}>
                   Nenhum item nesta lista ainda.
                 </td>
               </tr>
@@ -256,12 +327,13 @@ export async function getServerSideProps({ req, params }) {
 
   const { data: itensRaw } = await supabaseAdmin
     .from("price_list_items")
-    .select("preco, ordem, grupo:pai_id ( id, nome, codigo )")
+    .select(
+      "preco, ordem, grupo:pai_id ( id, nome, codigo, preco_venda, preco_custo )"
+    )
     .eq("price_list_id", id);
 
   // Ordena pela "ordem" salva; itens antigos sem ordem definida (null)
-  // caem no fim, ordenados por nome -- e a primeira vez que alguém
-  // mexer nas setas já fixa uma ordem sequencial de verdade.
+  // caem no fim, ordenados por nome.
   const itensOrdenados = (itensRaw || [])
     .filter((i) => i.grupo)
     .sort((a, b) => {
@@ -277,6 +349,7 @@ export async function getServerSideProps({ req, params }) {
     pai_id: i.grupo.id,
     nome: i.grupo.nome,
     codigo: i.grupo.codigo,
+    custo: Number(i.grupo.preco_venda ?? i.grupo.preco_custo ?? 0),
     preco: String(i.preco),
     ordem: i.ordem ?? index,
   }));
@@ -303,7 +376,7 @@ const styles = {
     padding: "28px 24px 60px",
   },
   header: {
-    maxWidth: 1000,
+    maxWidth: 1100,
     margin: "0 auto 20px",
     display: "flex",
     alignItems: "flex-start",
@@ -324,7 +397,7 @@ const styles = {
     cursor: "pointer",
   },
   backLink: { color: COLORS.accent, fontSize: 14, textDecoration: "none" },
-  addBox: { maxWidth: 1000, margin: "0 auto 16px", position: "relative" },
+  addBox: { maxWidth: 1100, margin: "0 auto 16px", position: "relative" },
   search: {
     boxSizing: "border-box",
     width: "100%",
@@ -352,7 +425,50 @@ const styles = {
     cursor: "pointer",
     borderBottom: `1px solid ${COLORS.border}`,
   },
-  tableWrap: { maxWidth: 1000, margin: "0 auto", overflowX: "auto" },
+  aplicarBox: {
+    maxWidth: 1100,
+    margin: "0 auto 20px",
+    display: "flex",
+    gap: 10,
+    alignItems: "center",
+    flexWrap: "wrap",
+  },
+  select: {
+    boxSizing: "border-box",
+    padding: "10px 12px",
+    borderRadius: 8,
+    border: `1px solid ${COLORS.border}`,
+    fontSize: 14,
+  },
+  aplicarInput: {
+    boxSizing: "border-box",
+    padding: "10px 12px",
+    borderRadius: 8,
+    border: `1px solid ${COLORS.border}`,
+    fontSize: 14,
+    width: 140,
+  },
+  aplicarButton: {
+    padding: "10px 16px",
+    borderRadius: 8,
+    border: "none",
+    background: COLORS.accent,
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: 600,
+    cursor: "pointer",
+  },
+  salvarTudoButton: {
+    padding: "10px 16px",
+    borderRadius: 8,
+    border: `1px solid ${COLORS.stockOk}`,
+    background: COLORS.stockOkBg,
+    color: COLORS.stockOk,
+    fontSize: 14,
+    fontWeight: 700,
+    cursor: "pointer",
+  },
+  tableWrap: { maxWidth: 1100, margin: "0 auto", overflowX: "auto" },
   table: { width: "100%", borderCollapse: "collapse" },
   th: {
     textAlign: "left",
@@ -382,15 +498,12 @@ const styles = {
     fontSize: 11,
     cursor: "pointer",
   },
-  saveButton: {
-    padding: "6px 10px",
-    borderRadius: 6,
-    border: "none",
-    background: COLORS.accent,
-    color: "#fff",
-    fontSize: 12,
-    fontWeight: 600,
-    cursor: "pointer",
+  lucroBadge: {
+    display: "inline-block",
+    fontSize: 13,
+    fontWeight: 700,
+    padding: "3px 10px",
+    borderRadius: 999,
   },
   removeButton: {
     padding: "6px 10px",
