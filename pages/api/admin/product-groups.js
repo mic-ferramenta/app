@@ -17,6 +17,7 @@ export default async function handler(req, res) {
   let query = supabaseAdmin
     .from("produtos_catalogo")
     .select("id, nome, codigo, imagem_url, preco_venda, preco_custo, variacoes")
+    .eq("em_estoque", true) // esconde produtos sem estoque em nenhum tamanho
     .order("nome", { ascending: true })
     .limit(200);
 
