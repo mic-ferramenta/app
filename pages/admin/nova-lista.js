@@ -463,48 +463,70 @@ function TelaPrecificacao({
                 <th style={styles.th}>Produto</th>
                 <th style={styles.th}>Valor base</th>
                 <th style={styles.th}>Valor final</th>
+                <th style={styles.th}>% de lucro</th>
               </tr>
             </thead>
             <tbody>
-              {selecionados.map((g, index) => (
-                <tr key={g.id} style={styles.tr}>
-                  <td style={styles.td}>
-                    <div style={styles.ordemButtons}>
-                      <button
-                        onClick={() => onMover(g.id, -1)}
-                        disabled={index === 0}
-                        title="Mover para cima"
-                        style={styles.ordemButton}
-                      >
-                        ▲
-                      </button>
-                      <button
-                        onClick={() => onMover(g.id, 1)}
-                        disabled={index === selecionados.length - 1}
-                        title="Mover para baixo"
-                        style={styles.ordemButton}
-                      >
-                        ▼
-                      </button>
-                    </div>
-                  </td>
-                  <td style={styles.td}>
-                    <div style={{ fontWeight: 600 }}>{g.nome}</div>
-                    <div style={{ fontSize: 12, color: COLORS.muted }}>{g.codigo}</div>
-                  </td>
-                  <td style={styles.td}>{fmtMoeda(itensPreco[g.id]?.custo)}</td>
-                  <td style={styles.td}>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={itensPreco[g.id]?.final ?? ""}
-                      onChange={(e) => onFinalManual(g.id, e.target.value)}
-                      style={styles.priceInput}
-                    />
-                  </td>
-                </tr>
-              ))}
+              {selecionados.map((g, index) => {
+                const base = Number(itensPreco[g.id]?.custo || 0);
+                const final = Number(itensPreco[g.id]?.final || 0);
+                const lucro = base > 0 ? ((final - base) / base) * 100 : null;
+
+                return (
+                  <tr key={g.id} style={styles.tr}>
+                    <td style={styles.td}>
+                      <div style={styles.ordemButtons}>
+                        <button
+                          onClick={() => onMover(g.id, -1)}
+                          disabled={index === 0}
+                          title="Mover para cima"
+                          style={styles.ordemButton}
+                        >
+                          ▲
+                        </button>
+                        <button
+                          onClick={() => onMover(g.id, 1)}
+                          disabled={index === selecionados.length - 1}
+                          title="Mover para baixo"
+                          style={styles.ordemButton}
+                        >
+                          ▼
+                        </button>
+                      </div>
+                    </td>
+                    <td style={styles.td}>
+                      <div style={{ fontWeight: 600 }}>{g.nome}</div>
+                      <div style={{ fontSize: 12, color: COLORS.muted }}>{g.codigo}</div>
+                    </td>
+                    <td style={styles.td}>{fmtMoeda(itensPreco[g.id]?.custo)}</td>
+                    <td style={styles.td}>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={itensPreco[g.id]?.final ?? ""}
+                        onChange={(e) => onFinalManual(g.id, e.target.value)}
+                        style={styles.priceInput}
+                      />
+                    </td>
+                    <td style={styles.td}>
+                      {lucro === null ? (
+                        <span style={{ color: COLORS.muted }}>-</span>
+                      ) : (
+                        <span
+                          style={{
+                            ...styles.lucroBadge,
+                            color: lucro > 0 ? COLORS.stockOk : COLORS.danger,
+                            background: lucro > 0 ? COLORS.stockOkBg : "#fee2e2",
+                          }}
+                        >
+                          {lucro.toFixed(1)}%
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </main>
@@ -797,6 +819,13 @@ const styles = {
     color: COLORS.text,
     fontSize: 11,
     cursor: "pointer",
+  },
+  lucroBadge: {
+    display: "inline-block",
+    fontSize: 13,
+    fontWeight: 700,
+    padding: "3px 10px",
+    borderRadius: 999,
   },
   sucessoWrap: {
     minHeight: "calc(100vh - 64px)",
