@@ -1,10 +1,14 @@
 // pages/lista/[slug].js
 //
-// Página pública, renderizada no servidor. O slug agora pertence à
-// LISTA (price_lists), não ao cliente -- então um mesmo cliente pode
-// ter várias listas, cada uma com seu próprio link.
+// Página pública, renderizada no servidor. O slug pertence à LISTA
+// (price_lists), não ao cliente -- um mesmo cliente pode ter várias
+// listas, cada uma com seu próprio link.
 
+import { useState } from "react";
 import { supabaseAdmin } from "../../lib/supabaseAdmin";
+
+const LOGO_URL =
+  "https://miccamisasdetime.com.br/cdn/shop/files/Design_sem_nome_-_2026-02-01T085034.319.png?v=1770226222&width=90";
 
 // Blindagem: tira um eventual prefixo "Tamanho:" que tenha vindo cru do
 // Bling, não importa a caixa ou os espaços ao redor.
@@ -13,65 +17,123 @@ function limparTamanho(v) {
   return String(v).replace(/^\s*tamanho\s*:\s*/i, "").trim();
 }
 
+function ItemLista({ item }) {
+  const [expandido, setExpandido] = useState(false);
+  const variacoes = item.variacoes || [];
+
+  return (
+    <div style={styles.card}>
+      <div
+        style={styles.cardClicavel}
+        onClick={() => setExpandido((e) => !e)}
+      >
+        <div style={styles.imageWrap}>
+          {item.imagem_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={item.imagem_url} alt={item.nome} style={styles.image} />
+          ) : (
+            <div style={styles.imagePlaceholder}>sem imagem</div>
+          )}
+        </div>
+
+        <div style={styles.cardBody}>
+          <h2 style={styles.productName}>{item.nome}</h2>
+
+          <div style={styles.tamanhos}>
+            {variacoes.length === 0 && (
+              <span style={styles.semTamanho}>tamanho único</span>
+            )}
+            {variacoes.map((v) => {
+              const comEstoque = Number(v.estoque) > 0;
+              return (
+                <span
+                  key={v.id}
+                  style={{
+                    ...styles.badge,
+                    color: comEstoque ? AZUL : "#9ca3af",
+                    borderColor: comEstoque ? AZUL : "#e5e5e5",
+                    background: comEstoque ? "#eef2ff" : "#f5f5f5",
+                  }}
+                >
+                  {limparTamanho(v.tamanho) || "Único"}
+                </span>
+              );
+            })}
+          </div>
+
+          <p style={styles.price}>
+            {Number(item.preco).toLocaleString("pt-BR", {
+              style: "currency",
+              currency: "BRL",
+            })}
+          </p>
+
+          <span style={styles.expandHint}>
+            {expandido ? "▲ ocultar estoque por tamanho" : "▼ ver estoque por tamanho"}
+          </span>
+        </div>
+      </div>
+
+      {expandido && (
+        <div style={styles.expandBox}>
+          <table style={styles.expandTable}>
+            <thead>
+              <tr>
+                <th style={styles.expandTh}>Tamanho</th>
+                <th style={styles.expandTh}>Estoque</th>
+              </tr>
+            </thead>
+            <tbody>
+              {variacoes.length === 0 && (
+                <tr>
+                  <td style={styles.expandTd} colSpan={2}>
+                    Sem variações cadastradas.
+                  </td>
+                </tr>
+              )}
+              {variacoes.map((v) => (
+                <tr key={v.id}>
+                  <td style={styles.expandTd}>{limparTamanho(v.tamanho) || "Único"}</td>
+                  <td style={styles.expandTd}>{v.estoque ?? 0}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ListaDePrecos({ cliente, itens }) {
   return (
     <div style={styles.page}>
-      <header style={styles.header}>
-        <h1 style={styles.title}>Lista de preços</h1>
-        <p style={styles.subtitle}>{cliente.nome}</p>
-      </header>
+      <div style={styles.tarja}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={LOGO_URL} alt="MIC Camisas de Time" style={styles.logo} />
+      </div>
 
-      <main style={styles.grid}>
-        {itens.map((item) => (
-          <div key={item.id} style={styles.card}>
-            <div style={styles.imageWrap}>
-              {item.imagem_url ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={item.imagem_url} alt={item.nome} style={styles.image} />
-              ) : (
-                <div style={styles.imagePlaceholder}>sem imagem</div>
-              )}
-            </div>
+      <div style={styles.content}>
+        <header style={styles.header}>
+          <h1 style={styles.title}>Lista de preços</h1>
+          <p style={styles.subtitle}>{cliente.nome}</p>
+        </header>
 
-            <div style={styles.cardBody}>
-              <h2 style={styles.productName}>{item.nome}</h2>
+        <div style={styles.aviso}>
+          O estoque exibido pode variar. Clique em um produto para ver o
+          estoque por tamanho.
+        </div>
 
-              <div style={styles.tamanhos}>
-                {item.variacoes.length === 0 && (
-                  <span style={styles.semTamanho}>tamanho único</span>
-                )}
-                {item.variacoes.map((v) => {
-                  const comEstoque = Number(v.estoque) > 0;
-                  return (
-                    <span
-                      key={v.id}
-                      style={{
-                        ...styles.badge,
-                        color: comEstoque ? AZUL : "#9ca3af",
-                        borderColor: comEstoque ? AZUL : "#e5e5e5",
-                        background: comEstoque ? "#eef2ff" : "#f5f5f5",
-                      }}
-                    >
-                      {limparTamanho(v.tamanho) || "Único"}
-                    </span>
-                  );
-                })}
-              </div>
+        <main style={styles.grid}>
+          {itens.map((item) => (
+            <ItemLista key={item.id} item={item} />
+          ))}
 
-              <p style={styles.price}>
-                {Number(item.preco).toLocaleString("pt-BR", {
-                  style: "currency",
-                  currency: "BRL",
-                })}
-              </p>
-            </div>
-          </div>
-        ))}
-
-        {itens.length === 0 && (
-          <p style={styles.empty}>Nenhum item cadastrado nesta lista ainda.</p>
-        )}
-      </main>
+          {itens.length === 0 && (
+            <p style={styles.empty}>Nenhum item cadastrado nesta lista ainda.</p>
+          )}
+        </main>
+      </div>
     </div>
   );
 }
@@ -122,11 +184,20 @@ const styles = {
     background: "#ffffff",
     color: "#000000",
     fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
-    padding: "32px 20px 60px",
   },
+  tarja: {
+    width: "100%",
+    background: "#000000",
+    padding: "16px 24px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-start",
+  },
+  logo: { height: 32, width: "auto" },
+  content: { padding: "32px 20px 60px" },
   header: {
     maxWidth: 1000,
-    margin: "0 auto 32px",
+    margin: "0 auto 16px",
     borderBottom: `3px solid ${AZUL}`,
     paddingBottom: 16,
   },
@@ -142,6 +213,16 @@ const styles = {
     color: AZUL,
     fontWeight: 600,
   },
+  aviso: {
+    maxWidth: 1000,
+    margin: "0 auto 24px",
+    padding: "10px 14px",
+    borderRadius: 8,
+    background: "#fffbeb",
+    border: "1px solid #fde68a",
+    color: "#92400e",
+    fontSize: 13,
+  },
   grid: {
     maxWidth: 1000,
     margin: "0 auto",
@@ -156,6 +237,11 @@ const styles = {
     background: "#ffffff",
     display: "flex",
     flexDirection: "column",
+  },
+  cardClicavel: {
+    display: "flex",
+    flexDirection: "column",
+    cursor: "pointer",
   },
   imageWrap: {
     width: "100%",
@@ -205,6 +291,27 @@ const styles = {
     fontSize: 20,
     fontWeight: 700,
     color: AZUL,
+  },
+  expandHint: {
+    marginTop: 2,
+    fontSize: 12,
+    color: "#666",
+  },
+  expandBox: {
+    borderTop: "1px solid #e5e5e5",
+    padding: "10px 14px 14px",
+  },
+  expandTable: { width: "100%", borderCollapse: "collapse" },
+  expandTh: {
+    textAlign: "left",
+    fontSize: 11,
+    color: "#666",
+    padding: "4px 6px",
+  },
+  expandTd: {
+    fontSize: 13,
+    padding: "4px 6px",
+    borderTop: "1px solid #e5e5e5",
   },
   empty: {
     gridColumn: "1 / -1",
