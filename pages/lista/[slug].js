@@ -137,7 +137,7 @@ export async function getServerSideProps({ params }) {
 
   const { data: lista } = await supabaseAdmin
     .from("price_lists")
-    .select("id, ativo, client:client_id ( nome )")
+    .select("id, ativo, titulo, client:client_id ( nome )")
     .eq("slug", slug)
     .eq("ativo", true)
     .single();
@@ -166,7 +166,7 @@ export async function getServerSideProps({ params }) {
     }));
 
   return {
-    props: { cliente: { nome: lista.client.nome }, itens },
+    props: { cliente: { nome: lista.client?.nome || lista.titulo }, itens },
   };
 }
 

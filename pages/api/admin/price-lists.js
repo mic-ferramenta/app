@@ -67,7 +67,7 @@ export default async function handler(req, res) {
 
     let query = supabaseAdmin
       .from("price_lists")
-      .select("id, slug, created_at, vencimento, ativo, client:client_id ( id, nome )")
+      .select("id, slug, created_at, vencimento, ativo, titulo, client:client_id ( id, nome )")
       .order("created_at", { ascending: false });
 
     if (data_inicio) query = query.gte("created_at", `${data_inicio}T00:00:00`);
@@ -76,20 +76,27 @@ export default async function handler(req, res) {
     const { data, error } = await query;
     if (error) return res.status(500).json({ error: error.message });
 
-    // Filtro por nome de cliente é aplicado aqui (mais simples que fazer
-    // um "or" dentro de um relacionamento aninhado no PostgREST).
+    // Filtro por nome de cliente OU título é aplicado aqui (mais simples
+    // que fazer um "or" dentro de um relacionamento aninhado no PostgREST).
     const termo = String(cliente || "").trim().toLowerCase();
     const lists = termo
-      ? (data || []).filter((l) => l.client?.nome?.toLowerCase().includes(termo))
+      ? (data || []).filter((l) =>
+          (l.client?.nome || l.titulo || "").toLowerCase().includes(termo)
+        )
       : data || [];
 
     return res.status(200).json({ lists });
   }
 
   if (req.method === "POST") {
-    const { bling_customer, items, vencimento } = req.body || {};
+    const { bling_customer, titulo, items, vencimento } = req.body || {};
 
-    if (!bling_customer?.bling_id || !bling_customer?.nome) {
+    const usaTitulo = !bling_customer?.bling_id;
+
+    if (usaTitulo && !String(titulo || "").trim()) {
+      return res.status(400).json({ error: "Informe um cliente ou um título para a lista." });
+    }
+    if (!usaTitulo && !bling_customer?.nome) {
       return res.status(400).json({ error: "Cliente é obrigatório." });
     }
     if (!Array.isArray(items) || items.length === 0) {
@@ -102,13 +109,24 @@ export default async function handler(req, res) {
     }
 
     try {
-      const client = await findOrCreateClient(bling_customer);
-      const slug = await generateUniqueSlug("price_lists", client.nome);
+      let clientId = null;
+      let baseParaSlug;
+
+      if (usaTitulo) {
+        baseParaSlug = titulo.trim();
+      } else {
+        const client = await findOrCreateClient(bling_customer);
+        clientId = client.id;
+        baseParaSlug = client.nome;
+      }
+
+      const slug = await generateUniqueSlug("price_lists", baseParaSlug);
 
       const { data: priceList, error: listError } = await supabaseAdmin
         .from("price_lists")
         .insert({
-          client_id: client.id,
+          client_id: clientId,
+          titulo: usaTitulo ? titulo.trim() : null,
           slug,
           ativo: true,
           vencimento: vencimento || null,

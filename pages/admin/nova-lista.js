@@ -26,6 +26,8 @@ export default function NovaLista() {
   const [buscaCliente, setBuscaCliente] = useState("");
   const [clientes, setClientes] = useState([]);
   const [clienteSelecionado, setClienteSelecionado] = useState(null);
+  const [usarTitulo, setUsarTitulo] = useState(false);
+  const [titulo, setTitulo] = useState("");
   const [vencimento, setVencimento] = useState("");
 
   const [buscaProduto, setBuscaProduto] = useState("");
@@ -90,7 +92,11 @@ export default function NovaLista() {
     [gruposSelecionados]
   );
 
-  const podeAvancar = !!clienteSelecionado && listaSelecionados.length > 0;
+  const nomeParaExibicao = clienteSelecionado?.nome || titulo;
+
+  const podeAvancar =
+    (!!clienteSelecionado || (usarTitulo && titulo.trim())) &&
+    listaSelecionados.length > 0;
 
   // --- passo 2: precificação --------------------------------------------
   // itensPreco: { [pai_id]: { custo, final } }
@@ -169,10 +175,10 @@ export default function NovaLista() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        bling_customer: {
-          bling_id: clienteSelecionado.bling_id,
-          nome: clienteSelecionado.nome,
-        },
+        bling_customer: clienteSelecionado
+          ? { bling_id: clienteSelecionado.bling_id, nome: clienteSelecionado.nome }
+          : undefined,
+        titulo: clienteSelecionado ? undefined : titulo,
         vencimento: vencimento || null,
         items,
       }),
@@ -195,6 +201,8 @@ export default function NovaLista() {
     setBuscaCliente("");
     setClientes([]);
     setClienteSelecionado(null);
+    setUsarTitulo(false);
+    setTitulo("");
     setVencimento("");
     setBuscaProduto("");
     setGruposSelecionados({});
@@ -210,7 +218,7 @@ export default function NovaLista() {
   if (step === "precificar") {
     return (
       <TelaPrecificacao
-        cliente={clienteSelecionado}
+        nomeExibicao={nomeParaExibicao}
         selecionados={selecionadosOrdenados}
         itensPreco={itensPreco}
         modoAplicar={modoAplicar}
@@ -244,9 +252,33 @@ export default function NovaLista() {
         <section style={styles.section}>
           <h2 style={styles.colTitle}>1. Cliente e validade</h2>
 
+          {!clienteSelecionado && (
+            <button
+              onClick={() => {
+                setUsarTitulo((v) => !v);
+                setBuscaCliente("");
+              }}
+              style={styles.toggleModoButton}
+            >
+              {usarTitulo
+                ? "← Selecionar um cliente"
+                : "Gerar sem cliente específico (usar um título)"}
+            </button>
+          )}
+
           <div style={styles.clienteEValidade}>
             <div style={{ minWidth: 0, position: "relative" }}>
-              {!clienteSelecionado && (
+              {usarTitulo && !clienteSelecionado && (
+                <input
+                  type="text"
+                  placeholder='Título da lista, ex: "Preços de promoção - Julho"'
+                  value={titulo}
+                  onChange={(e) => setTitulo(e.target.value)}
+                  style={styles.search}
+                />
+              )}
+
+              {!usarTitulo && !clienteSelecionado && (
                 <>
                   <input
                     type="text"
@@ -370,7 +402,7 @@ export default function NovaLista() {
 }
 
 function TelaPrecificacao({
-  cliente,
+  nomeExibicao,
   selecionados,
   itensPreco,
   modoAplicar,
@@ -396,7 +428,7 @@ function TelaPrecificacao({
         <header style={styles.header}>
           <div>
             <h1 style={styles.title}>Precificar lista</h1>
-            <p style={styles.clienteHeader}>{cliente?.nome}</p>
+            <p style={styles.clienteHeader}>{nomeExibicao}</p>
           </div>
           <button onClick={onVoltar} style={styles.backLinkButton}>← Voltar</button>
         </header>
@@ -588,6 +620,17 @@ const styles = {
     borderTop: `1px solid ${COLORS.border}`,
   },
   colTitle: { margin: 0, fontSize: 15 },
+  toggleModoButton: {
+    alignSelf: "flex-start",
+    background: "transparent",
+    border: "none",
+    color: COLORS.accent,
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: "pointer",
+    padding: 0,
+    textAlign: "left",
+  },
   clienteEValidade: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
