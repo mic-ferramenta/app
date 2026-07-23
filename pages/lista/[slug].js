@@ -7,6 +7,7 @@
 import { useState } from "react";
 import { supabaseAdmin } from "../../lib/supabaseAdmin";
 import { limparTamanho, ordenarVariacoes } from "../../lib/tamanhos";
+import { estoquePorTamanho, gradeQueCabe, composicaoTexto } from "../../lib/grades";
 
 const LOGO_URL =
   "https://miccamisasdetime.com.br/cdn/shop/files/Design_sem_nome_-_2026-02-01T085034.319.png?v=1770226222&width=90";
@@ -14,6 +15,7 @@ const LOGO_URL =
 function ItemLista({ item, mostrarPreco }) {
   const [expandido, setExpandido] = useState(false);
   const variacoes = ordenarVariacoes(item.variacoes);
+  const isGrade = item.tipo === "grade";
 
   return (
     <div style={styles.card}>
@@ -33,29 +35,48 @@ function ItemLista({ item, mostrarPreco }) {
         <div style={styles.cardBody}>
           <h2 style={styles.productName}>{item.nome}</h2>
 
-          <div style={styles.tamanhos}>
-            {variacoes.length === 0 && (
-              <span style={styles.semTamanho}>tamanho único</span>
-            )}
-            {variacoes.map((v) => {
-              const comEstoque = Number(v.estoque) > 0;
-              return (
-                <span
-                  key={v.id}
-                  style={{
-                    ...styles.badge,
-                    color: comEstoque ? AZUL : "#9ca3af",
-                    borderColor: comEstoque ? AZUL : "#e5e5e5",
-                    background: comEstoque ? "#eef2ff" : "#f5f5f5",
-                  }}
-                >
-                  {limparTamanho(v.tamanho) || "Único"}
+          {isGrade ? (
+            <div style={styles.gradeInfo}>
+              {item.gradeAtual ? (
+                <>
+                  <span style={styles.gradeDisponivelBadge}>
+                    {item.gradeAtual.nome} disponível
+                  </span>
+                  <span style={styles.gradeComposicao}>
+                    {composicaoTexto(item.gradeAtual)}
+                  </span>
+                </>
+              ) : (
+                <span style={styles.gradeIndisponivelBadge}>
+                  Indisponível no momento
                 </span>
-              );
-            })}
-          </div>
+              )}
+            </div>
+          ) : (
+            <div style={styles.tamanhos}>
+              {variacoes.length === 0 && (
+                <span style={styles.semTamanho}>tamanho único</span>
+              )}
+              {variacoes.map((v) => {
+                const comEstoque = Number(v.estoque) > 0;
+                return (
+                  <span
+                    key={v.id}
+                    style={{
+                      ...styles.badge,
+                      color: comEstoque ? AZUL : "#9ca3af",
+                      borderColor: comEstoque ? AZUL : "#e5e5e5",
+                      background: comEstoque ? "#eef2ff" : "#f5f5f5",
+                    }}
+                  >
+                    {limparTamanho(v.tamanho) || "Único"}
+                  </span>
+                );
+              })}
+            </div>
+          )}
 
-          {mostrarPreco && (
+          {mostrarPreco && (!isGrade || item.gradeAtual) && (
             <p style={styles.price}>
               {Number(item.preco).toLocaleString("pt-BR", {
                 style: "currency",
@@ -152,20 +173,48 @@ export async function getServerSideProps({ params }) {
   const { data: itensRaw } = await supabaseAdmin
     .from("price_list_items")
     .select(
-      "id, preco, ordem, grupo:pai_id ( id, nome, imagem_url, variacoes:produtos_variacoes ( id, tamanho, estoque ) )"
+      "id, preco, ordem, tipo, grupo:pai_id ( id, nome, imagem_url, variacoes:produtos_variacoes ( id, tamanho, estoque ) )"
     )
     .eq("price_list_id", lista.id)
     .order("ordem", { ascending: true });
 
+  // Só busca as grades cadastradas se realmente tiver algum item do
+  // tipo "grade" nesta lista -- evita uma consulta à toa nas listas
+  // que só têm itens por unidade (a grande maioria).
+  const temItemGrade = (itensRaw || []).some((i) => i.tipo === "grade");
+  let grades = [];
+  if (temItemGrade) {
+    const { data: gradesData } = await supabaseAdmin
+      .from("grades")
+      .select("id, nome, prioridade, composicao")
+      .eq("ativo", true)
+      .order("prioridade", { ascending: true });
+    grades = gradesData || [];
+  }
+
   const itens = (itensRaw || [])
     .filter((i) => i.grupo)
-    .map((i) => ({
-      id: i.id,
-      preco: i.preco,
-      nome: i.grupo.nome,
-      imagem_url: i.grupo.imagem_url,
-      variacoes: i.grupo.variacoes || [],
-    }));
+    .map((i) => {
+      const variacoes = i.grupo.variacoes || [];
+      const isGrade = i.tipo === "grade";
+
+      // A disponibilidade da grade é recalculada AGORA, com o estoque
+      // atual -- nunca lida de um valor salvo. É por isso que o link
+      // nunca fica "desatualizado": cada acesso reavalia do zero.
+      const gradeAtual = isGrade
+        ? gradeQueCabe(estoquePorTamanho(variacoes), grades)
+        : null;
+
+      return {
+        id: i.id,
+        preco: i.preco,
+        tipo: i.tipo,
+        nome: i.grupo.nome,
+        imagem_url: i.grupo.imagem_url,
+        variacoes,
+        gradeAtual,
+      };
+    });
 
   return {
     props: {
@@ -277,6 +326,26 @@ const styles = {
   },
   tamanhos: { display: "flex", flexWrap: "wrap", gap: 6 },
   semTamanho: { fontSize: 12, color: "#666" },
+  gradeInfo: { display: "flex", flexDirection: "column", gap: 4 },
+  gradeDisponivelBadge: {
+    alignSelf: "flex-start",
+    fontSize: 12,
+    fontWeight: 700,
+    padding: "3px 10px",
+    borderRadius: 999,
+    color: "#15803d",
+    background: "#dcfce7",
+  },
+  gradeIndisponivelBadge: {
+    alignSelf: "flex-start",
+    fontSize: 12,
+    fontWeight: 700,
+    padding: "3px 10px",
+    borderRadius: 999,
+    color: "#9ca3af",
+    background: "#f3f4f6",
+  },
+  gradeComposicao: { fontSize: 12, color: "#666", fontFamily: "monospace" },
   badge: {
     display: "inline-block",
     fontSize: 12,

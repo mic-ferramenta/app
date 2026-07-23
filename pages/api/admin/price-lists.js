@@ -142,6 +142,8 @@ export default async function handler(req, res) {
         pai_id: item.pai_id,
         preco: Number(item.preco_final),
         ordem: index,
+        tipo: item.tipo === "grade" ? "grade" : "unidade",
+        grade_id: item.tipo === "grade" ? item.grade_id || null : null,
       }));
 
       const { error: itemsError } = await supabaseAdmin

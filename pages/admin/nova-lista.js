@@ -11,7 +11,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { requireAdmin } from "../../lib/adminSession";
 import { COLORS } from "../../lib/theme";
+import { totalPecasGrade, composicaoTexto } from "../../lib/grades";
 import ProdutoGrupoCard from "../../components/ProdutoGrupoCard";
+import GradeProdutoCard from "../../components/GradeProdutoCard";
 
 const LOGO_URL =
   "https://miccamisasdetime.com.br/cdn/shop/files/Design_sem_nome_-_2026-02-01T085034.319.png?v=1770226222&width=90";
@@ -32,6 +34,7 @@ export default function NovaLista() {
   const [mostrarPreco, setMostrarPreco] = useState(true);
 
   const [buscaProduto, setBuscaProduto] = useState("");
+  const [modoProduto, setModoProduto] = useState("unidade"); // unidade | grade
   const [grupos, setGrupos] = useState([]);
   const [gruposSelecionados, setGruposSelecionados] = useState({}); // { [pai_id]: grupo }
 
@@ -51,13 +54,22 @@ export default function NovaLista() {
 
   useEffect(() => {
     const t = setTimeout(() => {
-      fetch(`/api/admin/product-groups?search=${encodeURIComponent(buscaProduto)}`)
+      fetch(`/api/admin/product-groups?search=${encodeURIComponent(buscaProduto)}&modo=${modoProduto}`)
         .then((r) => r.json())
         .then((d) => setGrupos(d.groups || []))
         .catch(() => {});
     }, 300);
     return () => clearTimeout(t);
-  }, [buscaProduto]);
+  }, [buscaProduto, modoProduto]);
+
+  // Trocar de modo limpa a seleção -- uma lista é ou toda de unidades,
+  // ou toda de grades, pra não misturar duas lógicas de preço diferentes.
+  function trocarModoProduto(novoModo) {
+    if (novoModo === modoProduto) return;
+    setModoProduto(novoModo);
+    setGruposSelecionados({});
+    setBuscaProduto("");
+  }
 
   function toggleGrupo(grupo) {
     setGruposSelecionados((prev) => {
@@ -116,7 +128,10 @@ export default function NovaLista() {
   function irParaPrecificacao() {
     const inicial = {};
     listaSelecionados.forEach((g) => {
-      const base = Number(g.preco_venda ?? g.preco_custo ?? 0);
+      const base =
+        modoProduto === "grade"
+          ? Number(g.preco_venda ?? 0) * totalPecasGrade(g.grade_disponivel)
+          : Number(g.preco_venda ?? g.preco_custo ?? 0);
       inicial[g.id] = { custo: base, final: base };
     });
     setItensPreco(inicial);
@@ -170,6 +185,8 @@ export default function NovaLista() {
     const items = selecionadosOrdenados.map((g) => ({
       pai_id: g.id,
       preco_final: itensPreco[g.id]?.final,
+      tipo: modoProduto,
+      grade_id: modoProduto === "grade" ? g.grade_disponivel?.id : undefined,
     }));
 
     const resp = await fetch("/api/admin/price-lists", {
@@ -208,6 +225,7 @@ export default function NovaLista() {
     setVencimento("");
     setMostrarPreco(true);
     setBuscaProduto("");
+    setModoProduto("unidade");
     setGruposSelecionados({});
     setItensPreco({});
     setOrdemManual([]);
@@ -223,6 +241,7 @@ export default function NovaLista() {
       <TelaPrecificacao
         nomeExibicao={nomeParaExibicao}
         mostrarPreco={mostrarPreco}
+        modoProduto={modoProduto}
         selecionados={selecionadosOrdenados}
         itensPreco={itensPreco}
         modoAplicar={modoAplicar}
@@ -339,6 +358,7 @@ export default function NovaLista() {
             </div>
 
             <label style={styles.validadeLabel}>
+              Validade da lista
               <input
                 type="date"
                 value={vencimento}
@@ -363,6 +383,34 @@ export default function NovaLista() {
         <section style={styles.section}>
           <h2 style={styles.colTitle}>2. Produtos ({listaSelecionados.length} selecionados)</h2>
 
+          <div style={styles.modoProdutoRow}>
+            <button
+              onClick={() => trocarModoProduto("unidade")}
+              style={{
+                ...styles.modoButton,
+                ...(modoProduto === "unidade" ? styles.modoButtonAtivo : {}),
+              }}
+            >
+              Por unidade
+            </button>
+            <button
+              onClick={() => trocarModoProduto("grade")}
+              style={{
+                ...styles.modoButton,
+                ...(modoProduto === "grade" ? styles.modoButtonAtivo : {}),
+              }}
+            >
+              Por grade
+            </button>
+          </div>
+
+          {modoProduto === "grade" && (
+            <p style={styles.gradeAviso}>
+              Só aparecem produtos que têm pelo menos 1 das grades cadastradas
+              possível com o estoque de hoje (tenta Grade 1, depois 2, depois 3).
+            </p>
+          )}
+
           <div style={styles.buscaProdutoRow}>
             <input
               type="text"
@@ -381,14 +429,23 @@ export default function NovaLista() {
           </div>
 
           <div style={styles.gridProdutos}>
-            {grupos.map((g) => (
-              <ProdutoGrupoCard
-                key={g.id}
-                grupo={g}
-                selecionado={!!gruposSelecionados[g.id]}
-                onToggle={toggleGrupo}
-              />
-            ))}
+            {grupos.map((g) =>
+              modoProduto === "grade" ? (
+                <GradeProdutoCard
+                  key={g.id}
+                  grupo={g}
+                  selecionado={!!gruposSelecionados[g.id]}
+                  onToggle={toggleGrupo}
+                />
+              ) : (
+                <ProdutoGrupoCard
+                  key={g.id}
+                  grupo={g}
+                  selecionado={!!gruposSelecionados[g.id]}
+                  onToggle={toggleGrupo}
+                />
+              )
+            )}
             {grupos.length === 0 && (
               <p style={styles.vazio}>Nenhum produto encontrado.</p>
             )}
@@ -416,6 +473,7 @@ export default function NovaLista() {
 function TelaPrecificacao({
   nomeExibicao,
   mostrarPreco,
+  modoProduto,
   selecionados,
   itensPreco,
   modoAplicar,
@@ -515,7 +573,11 @@ function TelaPrecificacao({
                     </td>
                     <td style={styles.td}>
                       <div style={{ fontWeight: 600 }}>{g.nome}</div>
-                      <div style={{ fontSize: 12, color: COLORS.muted }}>{g.codigo}</div>
+                      <div style={{ fontSize: 12, color: COLORS.muted }}>
+                        {modoProduto === "grade"
+                          ? `${g.grade_disponivel?.nome} · ${composicaoTexto(g.grade_disponivel)}`
+                          : g.codigo}
+                      </div>
                     </td>
                     {mostrarPreco && (
                       <>
@@ -756,6 +818,27 @@ const styles = {
     cursor: "pointer",
   },
   vazio: { fontSize: 13, color: COLORS.muted },
+  modoProdutoRow: { display: "flex", gap: 8 },
+  modoButton: {
+    padding: "8px 16px",
+    borderRadius: 999,
+    border: `1px solid ${COLORS.border}`,
+    background: "#fff",
+    color: COLORS.text,
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: "pointer",
+  },
+  modoButtonAtivo: {
+    borderColor: COLORS.accent,
+    background: COLORS.accentSoft,
+    color: COLORS.accent,
+  },
+  gradeAviso: {
+    margin: 0,
+    fontSize: 12,
+    color: COLORS.muted,
+  },
   buscaProdutoRow: { display: "flex", gap: 10, alignItems: "center" },
   marcarTodosButton: {
     padding: "10px 16px",
