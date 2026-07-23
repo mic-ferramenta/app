@@ -358,7 +358,6 @@ export default function NovaLista() {
             </div>
 
             <label style={styles.validadeLabel}>
-              Validade da lista
               <input
                 type="date"
                 value={vencimento}
