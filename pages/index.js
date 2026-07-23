@@ -28,7 +28,7 @@ const styles = {
     flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
-    background: "#ffffff",
+    background: "#000000",
     fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
   },
   tarja: {
@@ -46,6 +46,6 @@ const styles = {
   texto: {
     marginTop: 20,
     fontSize: 14,
-    color: "#888888",
+    color: "#ffffff",
   },
 };
