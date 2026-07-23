@@ -1,7 +1,8 @@
 // pages/admin/nova-lista.js
 //
 // Fluxo de 3 telas (tudo em uma página só, trocando por estado):
-//   1) selecionar   -> escolhe o cliente (contato do Bling) e os produtos
+//   1) selecionar   -> escolhe o cliente (contato do Bling), a validade
+//                      da lista e os produtos
 //   2) precificar   -> mostra os itens escolhidos com o custo, e deixa
 //                      aplicar % ou R$ em cima do custo, ou digitar o
 //                      valor final direto
@@ -11,6 +12,9 @@ import { useEffect, useMemo, useState } from "react";
 import { requireAdmin } from "../../lib/adminSession";
 import { COLORS } from "../../lib/theme";
 import ProdutoGrupoCard from "../../components/ProdutoGrupoCard";
+
+const LOGO_URL =
+  "https://miccamisasdetime.com.br/cdn/shop/files/Design_sem_nome_-_2026-02-01T085034.319.png?v=1770226222&width=90";
 
 const fmtMoeda = (v) =>
   Number(v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -22,12 +26,17 @@ export default function NovaLista() {
   const [buscaCliente, setBuscaCliente] = useState("");
   const [clientes, setClientes] = useState([]);
   const [clienteSelecionado, setClienteSelecionado] = useState(null);
+  const [vencimento, setVencimento] = useState("");
 
   const [buscaProduto, setBuscaProduto] = useState("");
   const [grupos, setGrupos] = useState([]);
-  const [gruposSelecionados, setGruposSelecionados] = useState({}); // { [group_id]: grupo }
+  const [gruposSelecionados, setGruposSelecionados] = useState({}); // { [pai_id]: grupo }
 
   useEffect(() => {
+    if (!buscaCliente.trim()) {
+      setClientes([]);
+      return;
+    }
     const t = setTimeout(() => {
       fetch(`/api/admin/bling-customers?search=${encodeURIComponent(buscaCliente)}`)
         .then((r) => r.json())
@@ -56,6 +65,23 @@ export default function NovaLista() {
     });
   }
 
+  const todosVisiveisSelecionados =
+    grupos.length > 0 && grupos.every((g) => gruposSelecionados[g.id]);
+
+  function marcarTodosVisiveis() {
+    setGruposSelecionados((prev) => {
+      const copy = { ...prev };
+      if (todosVisiveisSelecionados) {
+        grupos.forEach((g) => delete copy[g.id]);
+      } else {
+        grupos.forEach((g) => {
+          copy[g.id] = g;
+        });
+      }
+      return copy;
+    });
+  }
+
   const listaSelecionados = useMemo(
     () => Object.values(gruposSelecionados),
     [gruposSelecionados]
@@ -64,7 +90,7 @@ export default function NovaLista() {
   const podeAvancar = !!clienteSelecionado && listaSelecionados.length > 0;
 
   // --- passo 2: precificação --------------------------------------------
-  // itensPreco: { [group_id]: { custo, final } }
+  // itensPreco: { [pai_id]: { custo, final } }
   const [itensPreco, setItensPreco] = useState({});
   const [modoAplicar, setModoAplicar] = useState("percentual"); // percentual | valor
   const [valorAplicar, setValorAplicar] = useState("");
@@ -99,10 +125,10 @@ export default function NovaLista() {
     });
   }
 
-  function handleFinalManual(groupId, value) {
+  function handleFinalManual(paiId, value) {
     setItensPreco((prev) => ({
       ...prev,
-      [groupId]: { ...prev[groupId], final: value },
+      [paiId]: { ...prev[paiId], final: value },
     }));
   }
 
@@ -126,6 +152,7 @@ export default function NovaLista() {
           bling_id: clienteSelecionado.bling_id,
           nome: clienteSelecionado.nome,
         },
+        vencimento: vencimento || null,
         items,
       }),
     });
@@ -144,7 +171,11 @@ export default function NovaLista() {
 
   function comecarDeNovo() {
     setStep("selecionar");
+    setBuscaCliente("");
+    setClientes([]);
     setClienteSelecionado(null);
+    setVencimento("");
+    setBuscaProduto("");
     setGruposSelecionados({});
     setItensPreco({});
     setValorAplicar("");
@@ -176,106 +207,141 @@ export default function NovaLista() {
 
   return (
     <div style={styles.page}>
-      <header style={styles.header}>
-        <h1 style={styles.title}>Nova lista de preços</h1>
-        <a href="/admin" style={styles.backLink}>← Voltar</a>
-      </header>
+      <div style={styles.tarja}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={LOGO_URL} alt="MIC Camisas de Time" style={styles.logo} />
+      </div>
 
-      <section style={styles.section}>
-        <h2 style={styles.colTitle}>1. Cliente</h2>
-        {!clienteSelecionado && (
-          <input
-            type="text"
-            placeholder="Buscar cliente..."
-            value={buscaCliente}
-            onChange={(e) => setBuscaCliente(e.target.value)}
-            style={styles.search}
-          />
-        )}
+      <div style={styles.content}>
+        <header style={styles.header}>
+          <h1 style={styles.title}>Nova lista de preços</h1>
+          <a href="/admin" style={styles.backLink}>← Voltar</a>
+        </header>
 
-        {clienteSelecionado && (
-          <div style={styles.clienteSelecionadoBox}>
-            <div>
-              <p style={{ margin: 0, fontWeight: 700, fontSize: 15 }}>
-                {clienteSelecionado.nome}
-              </p>
-              <p style={{ margin: "2px 0 0", fontSize: 13, color: COLORS.muted }}>
-                {clienteSelecionado.telefone || "sem telefone cadastrado"}
-                {clienteSelecionado.documento ? ` · ${clienteSelecionado.documento}` : ""}
-              </p>
+        <section style={styles.section}>
+          <h2 style={styles.colTitle}>1. Cliente e validade</h2>
+
+          <div style={styles.clienteEValidade}>
+            <div style={{ flex: 1, minWidth: 260 }}>
+              {!clienteSelecionado && (
+                <>
+                  <input
+                    type="text"
+                    placeholder="Buscar cliente..."
+                    value={buscaCliente}
+                    onChange={(e) => setBuscaCliente(e.target.value)}
+                    style={styles.search}
+                  />
+                  {buscaCliente.trim() && (
+                    <div style={styles.listBoxClientes}>
+                      {clientes.map((c) => (
+                        <div
+                          key={c.id}
+                          onClick={() => {
+                            setClienteSelecionado(c);
+                            setBuscaCliente("");
+                          }}
+                          style={styles.clienteRow}
+                        >
+                          <p style={{ margin: 0, fontWeight: 600, fontSize: 14 }}>{c.nome}</p>
+                          <p style={{ margin: "2px 0 0", fontSize: 12, color: COLORS.muted }}>
+                            {c.telefone || "sem telefone"}
+                            {c.documento ? ` · ${c.documento}` : ""}
+                          </p>
+                        </div>
+                      ))}
+                      {clientes.length === 0 && (
+                        <p style={styles.vazio}>Nenhum cliente encontrado.</p>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {clienteSelecionado && (
+                <div style={styles.clienteSelecionadoBox}>
+                  <div>
+                    <p style={{ margin: 0, fontWeight: 700, fontSize: 15 }}>
+                      {clienteSelecionado.nome}
+                    </p>
+                    <p style={{ margin: "2px 0 0", fontSize: 13, color: COLORS.muted }}>
+                      {clienteSelecionado.telefone || "sem telefone cadastrado"}
+                      {clienteSelecionado.documento ? ` · ${clienteSelecionado.documento}` : ""}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setClienteSelecionado(null)}
+                    style={styles.trocarClienteButton}
+                  >
+                    Trocar
+                  </button>
+                </div>
+              )}
             </div>
+
+            <label style={styles.validadeLabel}>
+              Validade da lista
+              <input
+                type="date"
+                value={vencimento}
+                onChange={(e) => setVencimento(e.target.value)}
+                style={styles.validadeInput}
+              />
+            </label>
+          </div>
+        </section>
+
+        <hr style={styles.divider} />
+
+        <section style={styles.section}>
+          <h2 style={styles.colTitle}>2. Produtos ({listaSelecionados.length} selecionados)</h2>
+
+          <div style={styles.buscaProdutoRow}>
+            <input
+              type="text"
+              placeholder="Buscar produto por nome ou código..."
+              value={buscaProduto}
+              onChange={(e) => setBuscaProduto(e.target.value)}
+              style={{ ...styles.search, flex: 1 }}
+            />
             <button
-              onClick={() => setClienteSelecionado(null)}
-              style={styles.trocarClienteButton}
+              onClick={marcarTodosVisiveis}
+              disabled={grupos.length === 0}
+              style={styles.marcarTodosButton}
             >
-              Trocar
+              {todosVisiveisSelecionados ? "Desmarcar todos" : "Marcar todos"}
             </button>
           </div>
-        )}
 
-        {!clienteSelecionado && (
-          <div style={styles.listBoxClientes}>
-            {clientes.map((c) => (
-              <div
-                key={c.id}
-                onClick={() => setClienteSelecionado(c)}
-                style={styles.clienteRow}
-              >
-                <p style={{ margin: 0, fontWeight: 600, fontSize: 14 }}>{c.nome}</p>
-                <p style={{ margin: "2px 0 0", fontSize: 12, color: COLORS.muted }}>
-                  {c.telefone || "sem telefone"}
-                  {c.documento ? ` · ${c.documento}` : ""}
-                </p>
-              </div>
+          <div style={styles.gridProdutos}>
+            {grupos.map((g) => (
+              <ProdutoGrupoCard
+                key={g.id}
+                grupo={g}
+                selecionado={!!gruposSelecionados[g.id]}
+                onToggle={toggleGrupo}
+              />
             ))}
-            {clientes.length === 0 && (
-              <p style={styles.vazio}>
-                Nenhum cliente encontrado. Confira se a sincronização com o Bling já rodou.
-              </p>
+            {grupos.length === 0 && (
+              <p style={styles.vazio}>Nenhum produto encontrado.</p>
             )}
           </div>
-        )}
-      </section>
+        </section>
 
-      <hr style={styles.divider} />
-
-      <section style={styles.section}>
-        <h2 style={styles.colTitle}>2. Produtos ({listaSelecionados.length} selecionados)</h2>
-        <input
-          type="text"
-          placeholder="Buscar produto por nome ou código..."
-          value={buscaProduto}
-          onChange={(e) => setBuscaProduto(e.target.value)}
-          style={styles.search}
-        />
-        <div style={styles.gridProdutos}>
-          {grupos.map((g) => (
-            <ProdutoGrupoCard
-              key={g.id}
-              grupo={g}
-              selecionado={!!gruposSelecionados[g.id]}
-              onToggle={toggleGrupo}
-            />
-          ))}
-          {grupos.length === 0 && (
-            <p style={styles.vazio}>Nenhum produto encontrado.</p>
-          )}
-        </div>
-      </section>
-
-      <footer style={styles.footer}>
-        <button
-          onClick={irParaPrecificacao}
-          disabled={!podeAvancar}
-          style={{
-            ...styles.avancarButton,
-            opacity: podeAvancar ? 1 : 0.5,
-            cursor: podeAvancar ? "pointer" : "not-allowed",
-          }}
-        >
-          Avançar →
-        </button>
-      </footer>
+        <footer style={styles.footer}>
+          <button
+            onClick={irParaPrecificacao}
+            disabled={!podeAvancar}
+            style={{
+              ...styles.avancarButton,
+              opacity: podeAvancar ? 1 : 0.5,
+              cursor: podeAvancar ? "pointer" : "not-allowed",
+            }}
+          >
+            Avançar →
+          </button>
+        </footer>
+      </div>
     </div>
   );
 }
@@ -297,80 +363,87 @@ function TelaPrecificacao({
 }) {
   return (
     <div style={styles.page}>
-      <header style={styles.header}>
-        <div>
-          <h1 style={styles.title}>Precificar lista</h1>
-          <p style={styles.clienteHeader}>{cliente?.nome}</p>
-        </div>
-        <button onClick={onVoltar} style={styles.backLinkButton}>← Voltar</button>
-      </header>
-
-      <div style={styles.aplicarBox}>
-        <select
-          value={modoAplicar}
-          onChange={(e) => setModoAplicar(e.target.value)}
-          style={styles.select}
-        >
-          <option value="percentual">% sobre o custo</option>
-          <option value="valor">R$ sobre o custo</option>
-        </select>
-        <input
-          type="number"
-          step="0.01"
-          placeholder={modoAplicar === "percentual" ? "ex: 100" : "ex: 25,00"}
-          value={valorAplicar}
-          onChange={(e) => setValorAplicar(e.target.value)}
-          style={styles.aplicarInput}
-        />
-        <button onClick={onAplicar} style={styles.aplicarButton}>
-          Aplicar a todos
-        </button>
+      <div style={styles.tarja}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={LOGO_URL} alt="MIC Camisas de Time" style={styles.logo} />
       </div>
 
-      <main style={styles.tableWrap}>
-        <table style={styles.table}>
-          <thead>
-            <tr>
-              <th style={styles.th}>Produto</th>
-              <th style={styles.th}>Custo</th>
-              <th style={styles.th}>Valor final</th>
-            </tr>
-          </thead>
-          <tbody>
-            {selecionados.map((g) => (
-              <tr key={g.id} style={styles.tr}>
-                <td style={styles.td}>
-                  <div style={{ fontWeight: 600 }}>{g.nome}</div>
-                  <div style={{ fontSize: 12, color: COLORS.muted }}>{g.codigo}</div>
-                </td>
-                <td style={styles.td}>{fmtMoeda(itensPreco[g.id]?.custo)}</td>
-                <td style={styles.td}>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={itensPreco[g.id]?.final ?? ""}
-                    onChange={(e) => onFinalManual(g.id, e.target.value)}
-                    style={styles.priceInput}
-                  />
-                </td>
+      <div style={styles.content}>
+        <header style={styles.header}>
+          <div>
+            <h1 style={styles.title}>Precificar lista</h1>
+            <p style={styles.clienteHeader}>{cliente?.nome}</p>
+          </div>
+          <button onClick={onVoltar} style={styles.backLinkButton}>← Voltar</button>
+        </header>
+
+        <div style={styles.aplicarBox}>
+          <select
+            value={modoAplicar}
+            onChange={(e) => setModoAplicar(e.target.value)}
+            style={styles.select}
+          >
+            <option value="percentual">% sobre o custo</option>
+            <option value="valor">R$ sobre o custo</option>
+          </select>
+          <input
+            type="number"
+            step="0.01"
+            placeholder={modoAplicar === "percentual" ? "ex: 100" : "ex: 25,00"}
+            value={valorAplicar}
+            onChange={(e) => setValorAplicar(e.target.value)}
+            style={styles.aplicarInput}
+          />
+          <button onClick={onAplicar} style={styles.aplicarButton}>
+            Aplicar a todos
+          </button>
+        </div>
+
+        <main style={styles.tableWrap}>
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                <th style={styles.th}>Produto</th>
+                <th style={styles.th}>Custo</th>
+                <th style={styles.th}>Valor final</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </main>
+            </thead>
+            <tbody>
+              {selecionados.map((g) => (
+                <tr key={g.id} style={styles.tr}>
+                  <td style={styles.td}>
+                    <div style={{ fontWeight: 600 }}>{g.nome}</div>
+                    <div style={{ fontSize: 12, color: COLORS.muted }}>{g.codigo}</div>
+                  </td>
+                  <td style={styles.td}>{fmtMoeda(itensPreco[g.id]?.custo)}</td>
+                  <td style={styles.td}>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={itensPreco[g.id]?.final ?? ""}
+                      onChange={(e) => onFinalManual(g.id, e.target.value)}
+                      style={styles.priceInput}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </main>
 
-      {erro && <p style={{ color: COLORS.danger, textAlign: "center" }}>{erro}</p>}
+        {erro && <p style={{ color: COLORS.danger, textAlign: "center" }}>{erro}</p>}
 
-      <footer style={styles.footer}>
-        <button
-          onClick={onGerar}
-          disabled={gerando}
-          style={styles.avancarButton}
-        >
-          {gerando ? "Gerando..." : "Gerar lista"}
-        </button>
-      </footer>
+        <footer style={styles.footer}>
+          <button
+            onClick={onGerar}
+            disabled={gerando}
+            style={styles.avancarButton}
+          >
+            {gerando ? "Gerando..." : "Gerar lista"}
+          </button>
+        </footer>
+      </div>
     </div>
   );
 }
@@ -385,20 +458,27 @@ function TelaSucesso({ resultado, onNovaLista }) {
   }
 
   return (
-    <div style={styles.sucessoPage}>
-      <div style={styles.sucessoCard}>
-        <h1 style={{ margin: "0 0 8px", fontSize: 22 }}>Lista gerada! 🎉</h1>
-        <p style={{ margin: "0 0 20px", color: COLORS.muted }}>
-          Envie esse link para o cliente:
-        </p>
-        <p style={styles.linkBox}>{resultado?.url}</p>
-        <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-          <button onClick={copiar} style={styles.aplicarButton}>
-            {copiado ? "Copiado!" : "Copiar link"}
-          </button>
-          <button onClick={onNovaLista} style={styles.backLinkButton}>
-            Gerar nova lista
-          </button>
+    <div style={styles.page}>
+      <div style={styles.tarja}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={LOGO_URL} alt="MIC Camisas de Time" style={styles.logo} />
+      </div>
+
+      <div style={styles.sucessoWrap}>
+        <div style={styles.sucessoCard}>
+          <h1 style={{ margin: "0 0 8px", fontSize: 22 }}>Lista gerada! 🎉</h1>
+          <p style={{ margin: "0 0 20px", color: COLORS.muted }}>
+            Envie esse link para o cliente:
+          </p>
+          <p style={styles.linkBox}>{resultado?.url}</p>
+          <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+            <button onClick={copiar} style={styles.aplicarButton}>
+              {copiado ? "Copiado!" : "Copiar link"}
+            </button>
+            <button onClick={onNovaLista} style={styles.backLinkButton}>
+              Gerar nova lista
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -418,8 +498,17 @@ const styles = {
     background: COLORS.bg,
     color: COLORS.text,
     fontFamily: "system-ui, sans-serif",
-    padding: "28px 24px 100px",
   },
+  tarja: {
+    width: "100%",
+    background: "#000000",
+    padding: "16px 24px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-start",
+  },
+  logo: { height: 32, width: "auto" },
+  content: { padding: "28px 24px 100px" },
   header: {
     maxWidth: 1100,
     margin: "0 auto 20px",
@@ -454,11 +543,31 @@ const styles = {
     borderTop: `1px solid ${COLORS.border}`,
   },
   colTitle: { margin: 0, fontSize: 15 },
+  clienteEValidade: {
+    display: "flex",
+    gap: 20,
+    alignItems: "flex-start",
+    flexWrap: "wrap",
+  },
+  validadeLabel: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+    fontSize: 12,
+    color: COLORS.muted,
+  },
+  validadeInput: {
+    padding: "10px 12px",
+    borderRadius: 8,
+    border: `1px solid ${COLORS.border}`,
+    fontSize: 14,
+  },
   search: {
     padding: "10px 12px",
     borderRadius: 8,
     border: `1px solid ${COLORS.border}`,
     fontSize: 14,
+    width: "100%",
   },
   clienteSelecionadoBox: {
     display: "flex",
@@ -480,10 +589,11 @@ const styles = {
     cursor: "pointer",
   },
   listBoxClientes: {
+    marginTop: 8,
     display: "flex",
     flexDirection: "column",
     gap: 8,
-    maxHeight: 280,
+    maxHeight: 240,
     overflowY: "auto",
     paddingRight: 4,
   },
@@ -494,6 +604,18 @@ const styles = {
     cursor: "pointer",
   },
   vazio: { fontSize: 13, color: COLORS.muted },
+  buscaProdutoRow: { display: "flex", gap: 10, alignItems: "center" },
+  marcarTodosButton: {
+    padding: "10px 16px",
+    borderRadius: 8,
+    border: `1px solid ${COLORS.accent}`,
+    background: "transparent",
+    color: COLORS.accent,
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  },
   gridProdutos: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
@@ -566,13 +688,11 @@ const styles = {
     border: `1px solid ${COLORS.border}`,
     fontSize: 14,
   },
-  sucessoPage: {
-    minHeight: "100vh",
-    background: COLORS.bg,
+  sucessoWrap: {
+    minHeight: "calc(100vh - 64px)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    fontFamily: "system-ui, sans-serif",
   },
   sucessoCard: {
     width: 420,
