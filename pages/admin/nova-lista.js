@@ -222,7 +222,7 @@ export default function NovaLista() {
           <h2 style={styles.colTitle}>1. Cliente e validade</h2>
 
           <div style={styles.clienteEValidade}>
-            <div style={{ flex: 1, minWidth: 260 }}>
+            <div style={{ flex: 1, minWidth: 260, position: "relative" }}>
               {!clienteSelecionado && (
                 <>
                   <input
@@ -589,13 +589,21 @@ const styles = {
     cursor: "pointer",
   },
   listBoxClientes: {
-    marginTop: 8,
+    position: "absolute",
+    top: "calc(100% + 4px)",
+    left: 0,
+    right: 0,
+    zIndex: 20,
+    background: "#fff",
+    border: `1px solid ${COLORS.border}`,
+    borderRadius: 8,
+    boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
     display: "flex",
     flexDirection: "column",
     gap: 8,
+    padding: 8,
     maxHeight: 240,
     overflowY: "auto",
-    paddingRight: 4,
   },
   clienteRow: {
     border: `1px solid ${COLORS.border}`,
@@ -620,9 +628,6 @@ const styles = {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
     gap: 12,
-    maxHeight: 560,
-    overflowY: "auto",
-    paddingRight: 4,
   },
   footer: {
     maxWidth: 1100,
