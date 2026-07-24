@@ -2,16 +2,18 @@
 //
 // Fluxo de 3 telas (tudo em uma página só, trocando por estado):
 //   1) selecionar   -> escolhe o cliente (contato do Bling), a validade
-//                      da lista e os produtos
-//   2) precificar   -> mostra os itens escolhidos com o custo, e deixa
-//                      aplicar % ou R$ em cima do custo, ou digitar o
-//                      valor final direto
+//                      da lista e os produtos (por unidade ou por grade)
+//   2) precificar   -> mostra os itens escolhidos. No modo grade, um
+//                      preço por TAMANHO (P a 2GG), multiplicado pela
+//                      quantidade daquele tamanho na grade. Dá pra
+//                      arrastar os itens pra reordenar.
 //   3) sucesso      -> mostra o link gerado, com botão de copiar
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { requireAdmin } from "../../lib/adminSession";
 import { COLORS } from "../../lib/theme";
-import { totalPecasGrade, composicaoTexto } from "../../lib/grades";
+import { indiceOrdemTamanho } from "../../lib/tamanhos";
+import { composicaoTexto } from "../../lib/grades";
 import ProdutoGrupoCard from "../../components/ProdutoGrupoCard";
 import GradeProdutoCard from "../../components/GradeProdutoCard";
 
@@ -20,6 +22,38 @@ const LOGO_URL =
 
 const fmtMoeda = (v) =>
   Number(v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+// Tamanhos de uma grade, na ordem P/M/G/GG/2GG/3GG (não na ordem crua
+// que vier do objeto -- ver nota em lib/grades.js sobre jsonb).
+function tamanhosOrdenados(quantidades) {
+  return Object.keys(quantidades || {}).sort(
+    (a, b) => indiceOrdemTamanho(a) - indiceOrdemTamanho(b)
+  );
+}
+
+// Total em R$ de um item -- soma (preço do tamanho × quantidade do
+// tamanho) pra grade, ou é só o valor final direto pra unidade.
+function totalItem(item, modoProduto) {
+  if (!item) return 0;
+  if (modoProduto === "grade") {
+    return Object.entries(item.precos || {}).reduce(
+      (soma, [tam, p]) => soma + Number(p.final || 0) * Number(item.quantidades?.[tam] || 0),
+      0
+    );
+  }
+  return Number(item.final || 0);
+}
+
+function custoTotalItem(item, modoProduto) {
+  if (!item) return 0;
+  if (modoProduto === "grade") {
+    return Object.entries(item.precos || {}).reduce(
+      (soma, [tam, p]) => soma + Number(p.custo || 0) * Number(item.quantidades?.[tam] || 0),
+      0
+    );
+  }
+  return Number(item.custo || 0);
+}
 
 export default function NovaLista() {
   const [step, setStep] = useState("selecionar");
@@ -112,7 +146,8 @@ export default function NovaLista() {
     listaSelecionados.length > 0;
 
   // --- passo 2: precificação --------------------------------------------
-  // itensPreco: { [pai_id]: { custo, final } }
+  // itensPreco no modo grade:  { [pai_id]: { quantidades: {P:1,M:2,...}, precos: { P:{custo,final}, ... } } }
+  // itensPreco no modo unidade: { [pai_id]: { custo, final } }
   const [itensPreco, setItensPreco] = useState({});
   const [ordemManual, setOrdemManual] = useState([]); // array de pai_id, na ordem de exibição
   const [modoAplicar, setModoAplicar] = useState("percentual"); // percentual | valor
@@ -130,9 +165,12 @@ export default function NovaLista() {
     listaSelecionados.forEach((g) => {
       if (modoProduto === "grade") {
         const custoUnitario = Number(g.preco_venda ?? 0);
-        const quantidade = totalPecasGrade(g.grade_disponivel);
-        const custo = custoUnitario * quantidade;
-        inicial[g.id] = { custoUnitario, quantidade, custo, final: custo };
+        const quantidades = g.grade_disponivel?.composicao || {};
+        const precos = {};
+        Object.keys(quantidades).forEach((tam) => {
+          precos[tam] = { custo: custoUnitario, final: custoUnitario };
+        });
+        inicial[g.id] = { quantidades, precos };
       } else {
         const custo = Number(g.preco_venda ?? g.preco_custo ?? 0);
         inicial[g.id] = { custo, final: custo };
@@ -143,22 +181,23 @@ export default function NovaLista() {
     setStep("precificar");
   }
 
-  function moverItem(paiId, direcao) {
+  // Reordenação por arrastar-e-soltar: pega o item arrastado e coloca
+  // na posição do item onde soltou.
+  function reordenarPara(idArrastado, idAlvo) {
+    if (idArrastado === idAlvo) return;
     setOrdemManual((prev) => {
-      const idx = prev.indexOf(paiId);
-      const novoIdx = idx + direcao;
-      if (idx === -1 || novoIdx < 0 || novoIdx >= prev.length) return prev;
+      const from = prev.indexOf(idArrastado);
+      const to = prev.indexOf(idAlvo);
+      if (from === -1 || to === -1) return prev;
       const copy = [...prev];
-      [copy[idx], copy[novoIdx]] = [copy[novoIdx], copy[idx]];
+      const [movido] = copy.splice(from, 1);
+      copy.splice(to, 0, movido);
       return copy;
     });
   }
 
-  // No modo grade, o R$ é aplicado sobre o preço UNITÁRIO e depois
-  // multiplicado pela quantidade -- assim, se a composição da grade
-  // mudar (grade 1 vira grade 2, por exemplo), o valor por peça
-  // continua o mesmo, só o total muda. O % dá na mesma conta dos dois
-  // jeitos, então não precisa dessa distinção.
+  // Aplica % ou R$ sobre o preço-base de cada tamanho (no modo grade)
+  // ou sobre o valor base do item (no modo unidade).
   function aplicarEmMassa() {
     const valor = Number(valorAplicar);
     if (Number.isNaN(valor)) return;
@@ -167,29 +206,44 @@ export default function NovaLista() {
       const copy = { ...prev };
       for (const id of Object.keys(copy)) {
         const item = copy[id];
-        let final;
 
         if (modoProduto === "grade") {
-          final =
-            modoAplicar === "percentual"
-              ? item.custo * (1 + valor / 100)
-              : (item.custoUnitario + valor) * item.quantidade;
+          const novosPrecos = {};
+          for (const tam of Object.keys(item.precos)) {
+            const custo = Number(item.precos[tam].custo || 0);
+            const final =
+              modoAplicar === "percentual" ? custo * (1 + valor / 100) : custo + valor;
+            novosPrecos[tam] = { ...item.precos[tam], final: Number(final.toFixed(2)) };
+          }
+          copy[id] = { ...item, precos: novosPrecos };
         } else {
           const custo = Number(item.custo || 0);
-          final =
+          const final =
             modoAplicar === "percentual" ? custo * (1 + valor / 100) : custo + valor;
+          copy[id] = { ...item, final: Number(final.toFixed(2)) };
         }
-
-        copy[id] = { ...item, final: Number(final.toFixed(2)) };
       }
       return copy;
     });
   }
 
-  function handleFinalManual(paiId, value) {
+  function handleFinalManualUnidade(paiId, value) {
     setItensPreco((prev) => ({
       ...prev,
       [paiId]: { ...prev[paiId], final: value },
+    }));
+  }
+
+  function handleFinalManualGrade(paiId, tamanho, value) {
+    setItensPreco((prev) => ({
+      ...prev,
+      [paiId]: {
+        ...prev[paiId],
+        precos: {
+          ...prev[paiId].precos,
+          [tamanho]: { ...prev[paiId].precos[tamanho], final: value },
+        },
+      },
     }));
   }
 
@@ -202,7 +256,7 @@ export default function NovaLista() {
 
     const items = selecionadosOrdenados.map((g) => ({
       pai_id: g.id,
-      preco_final: itensPreco[g.id]?.final,
+      preco_final: totalItem(itensPreco[g.id], modoProduto),
       tipo: modoProduto,
       grade_id: modoProduto === "grade" ? g.grade_disponivel?.id : undefined,
     }));
@@ -267,8 +321,9 @@ export default function NovaLista() {
         valorAplicar={valorAplicar}
         setValorAplicar={setValorAplicar}
         onAplicar={aplicarEmMassa}
-        onFinalManual={handleFinalManual}
-        onMover={moverItem}
+        onFinalManualUnidade={handleFinalManualUnidade}
+        onFinalManualGrade={handleFinalManualGrade}
+        onReorder={reordenarPara}
         onVoltar={() => setStep("selecionar")}
         onGerar={gerarLista}
         gerando={gerando}
@@ -499,13 +554,28 @@ function TelaPrecificacao({
   valorAplicar,
   setValorAplicar,
   onAplicar,
-  onFinalManual,
-  onMover,
+  onFinalManualUnidade,
+  onFinalManualGrade,
+  onReorder,
   onVoltar,
   onGerar,
   gerando,
   erro,
 }) {
+  const arrastandoIdRef = useRef(null);
+
+  function handleDragStart(id) {
+    arrastandoIdRef.current = id;
+  }
+  function handleDragEnter(id) {
+    if (arrastandoIdRef.current && arrastandoIdRef.current !== id) {
+      onReorder(arrastandoIdRef.current, id);
+    }
+  }
+  function handleDragEnd() {
+    arrastandoIdRef.current = null;
+  }
+
   return (
     <div style={styles.page}>
       <div style={styles.tarja}>
@@ -531,7 +601,7 @@ function TelaPrecificacao({
             >
               <option value="percentual">% sobre o valor base</option>
               <option value="valor">
-                {modoProduto === "grade" ? "R$ sobre o custo unitário" : "R$ sobre o valor base"}
+                {modoProduto === "grade" ? "R$ sobre o preço de cada tamanho" : "R$ sobre o valor base"}
               </option>
             </select>
             <input
@@ -548,114 +618,122 @@ function TelaPrecificacao({
           </div>
         )}
 
-        <main style={styles.tableWrap}>
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.th}>Ordem</th>
-                <th style={styles.th}>Produto</th>
-                {mostrarPreco && modoProduto === "grade" && (
-                  <>
-                    <th style={styles.th}>Custo unitário</th>
-                    <th style={styles.th}>Qtd</th>
-                  </>
-                )}
-                {mostrarPreco && (
-                  <>
-                    <th style={styles.th}>Valor base</th>
-                    <th style={styles.th}>Valor final</th>
-                    <th style={styles.th}>% de lucro</th>
-                  </>
-                )}
-              </tr>
-            </thead>
-            <tbody>
-              {selecionados.map((g, index) => {
-                const base = Number(itensPreco[g.id]?.custo || 0);
-                const final = Number(itensPreco[g.id]?.final || 0);
-                const lucro = base > 0 ? ((final - base) / base) * 100 : null;
+        <p style={styles.arrastarDica}>Segure e arraste um item pela alça (⠿) para reordenar.</p>
 
-                return (
-                  <tr key={g.id} style={styles.tr}>
-                    <td style={styles.td}>
-                      <div style={styles.ordemButtons}>
-                        <button
-                          onClick={() => onMover(g.id, -1)}
-                          disabled={index === 0}
-                          title="Mover para cima"
-                          style={styles.ordemButton}
-                        >
-                          ▲
-                        </button>
-                        <button
-                          onClick={() => onMover(g.id, 1)}
-                          disabled={index === selecionados.length - 1}
-                          title="Mover para baixo"
-                          style={styles.ordemButton}
-                        >
-                          ▼
-                        </button>
-                      </div>
-                    </td>
-                    <td style={styles.td}>
-                      <div style={{ fontWeight: 600 }}>{g.nome}</div>
-                      <div style={{ fontSize: 12, color: COLORS.muted }}>
-                        {modoProduto === "grade"
-                          ? `${g.grade_disponivel?.nome} · ${composicaoTexto(g.grade_disponivel)}`
-                          : g.codigo}
-                      </div>
-                    </td>
-                    {mostrarPreco && modoProduto === "grade" && (
-                      <>
-                        <td style={styles.td}>{fmtMoeda(itensPreco[g.id]?.custoUnitario)}</td>
-                        <td style={styles.td}>{itensPreco[g.id]?.quantidade} peças</td>
-                      </>
+        <main style={styles.listaItens}>
+          {selecionados.map((g) => {
+            const item = itensPreco[g.id];
+            const custoTotal = custoTotalItem(item, modoProduto);
+            const finalTotal = totalItem(item, modoProduto);
+            const lucro = custoTotal > 0 ? ((finalTotal - custoTotal) / custoTotal) * 100 : null;
+
+            return (
+              <div
+                key={g.id}
+                draggable
+                onDragStart={() => handleDragStart(g.id)}
+                onDragEnter={() => handleDragEnter(g.id)}
+                onDragEnd={handleDragEnd}
+                onDragOver={(e) => e.preventDefault()}
+                style={styles.itemCard}
+              >
+                <div style={styles.itemCardHeader}>
+                  <span style={styles.dragHandle} title="Arraste para reordenar">⠿</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600 }}>{g.nome}</div>
+                    <div style={{ fontSize: 12, color: COLORS.muted }}>
+                      {modoProduto === "grade"
+                        ? `${g.grade_disponivel?.nome} · ${composicaoTexto(g.grade_disponivel)}`
+                        : g.codigo}
+                    </div>
+                  </div>
+                  {mostrarPreco && (
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontSize: 11, color: COLORS.muted }}>Total</div>
+                      <div style={{ fontWeight: 700 }}>{fmtMoeda(finalTotal)}</div>
+                    </div>
+                  )}
+                </div>
+
+                {mostrarPreco && modoProduto === "grade" && (
+                  <table style={styles.miniTable}>
+                    <thead>
+                      <tr>
+                        <th style={styles.miniTh}>Tamanho</th>
+                        <th style={styles.miniTh}>Qtd</th>
+                        <th style={styles.miniTh}>Preço</th>
+                        <th style={styles.miniTh}>Subtotal</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tamanhosOrdenados(item?.quantidades).map((tam) => {
+                        const qtd = Number(item.quantidades[tam] || 0);
+                        const precoFinal = Number(item.precos[tam]?.final || 0);
+                        return (
+                          <tr key={tam}>
+                            <td style={styles.miniTd}>{tam}</td>
+                            <td style={styles.miniTd}>{qtd}</td>
+                            <td style={styles.miniTd}>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                value={item.precos[tam]?.final ?? ""}
+                                onChange={(e) => onFinalManualGrade(g.id, tam, e.target.value)}
+                                style={styles.priceInputSmall}
+                              />
+                            </td>
+                            <td style={styles.miniTd}>{fmtMoeda(precoFinal * qtd)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+
+                {mostrarPreco && modoProduto === "unidade" && (
+                  <div style={styles.unidadeRow}>
+                    <span style={{ fontSize: 13, color: COLORS.muted }}>
+                      Valor base: {fmtMoeda(item?.custo)}
+                    </span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={item?.final ?? ""}
+                      onChange={(e) => onFinalManualUnidade(g.id, e.target.value)}
+                      style={styles.priceInput}
+                    />
+                  </div>
+                )}
+
+                {mostrarPreco && (
+                  <div style={styles.lucroRow}>
+                    <span style={{ fontSize: 12, color: COLORS.muted }}>% de lucro:</span>
+                    {lucro === null ? (
+                      <span style={{ color: COLORS.muted }}>-</span>
+                    ) : (
+                      <span
+                        style={{
+                          ...styles.lucroBadge,
+                          color: lucro > 0 ? COLORS.stockOk : COLORS.danger,
+                          background: lucro > 0 ? COLORS.stockOkBg : "#fee2e2",
+                        }}
+                      >
+                        {lucro.toFixed(1)}%
+                      </span>
                     )}
-                    {mostrarPreco && (
-                      <>
-                        <td style={styles.td}>{fmtMoeda(itensPreco[g.id]?.custo)}</td>
-                        <td style={styles.td}>
-                          <input
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            value={itensPreco[g.id]?.final ?? ""}
-                            onChange={(e) => onFinalManual(g.id, e.target.value)}
-                            style={styles.priceInput}
-                          />
-                        </td>
-                        <td style={styles.td}>
-                          {lucro === null ? (
-                            <span style={{ color: COLORS.muted }}>-</span>
-                          ) : (
-                            <span
-                              style={{
-                                ...styles.lucroBadge,
-                                color: lucro > 0 ? COLORS.stockOk : COLORS.danger,
-                                background: lucro > 0 ? COLORS.stockOkBg : "#fee2e2",
-                              }}
-                            >
-                              {lucro.toFixed(1)}%
-                            </span>
-                          )}
-                        </td>
-                      </>
-                    )}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </main>
 
         {erro && <p style={{ color: COLORS.danger, textAlign: "center" }}>{erro}</p>}
 
         <footer style={styles.footer}>
-          <button
-            onClick={onGerar}
-            disabled={gerando}
-            style={styles.avancarButton}
-          >
+          <button onClick={onGerar} disabled={gerando} style={styles.avancarButton}>
             {gerando ? "Gerando..." : "Gerar lista"}
           </button>
         </footer>
@@ -905,11 +983,17 @@ const styles = {
   },
   aplicarBox: {
     maxWidth: 1100,
-    margin: "0 auto 20px",
+    margin: "0 auto 12px",
     display: "flex",
     gap: 10,
     alignItems: "center",
     flexWrap: "wrap",
+  },
+  arrastarDica: {
+    maxWidth: 1100,
+    margin: "0 auto 16px",
+    fontSize: 12,
+    color: COLORS.muted,
   },
   select: {
     boxSizing: "border-box",
@@ -936,17 +1020,62 @@ const styles = {
     fontWeight: 600,
     cursor: "pointer",
   },
-  tableWrap: { maxWidth: 1100, margin: "0 auto", overflowX: "auto" },
-  table: { width: "100%", borderCollapse: "collapse" },
-  th: {
+  listaItens: {
+    maxWidth: 1100,
+    margin: "0 auto",
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+  },
+  itemCard: {
+    border: `1px solid ${COLORS.border}`,
+    borderRadius: 10,
+    padding: 12,
+    background: "#fff",
+  },
+  itemCardHeader: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+  },
+  dragHandle: {
+    cursor: "grab",
+    fontSize: 18,
+    color: COLORS.muted,
+    userSelect: "none",
+  },
+  miniTable: {
+    width: "100%",
+    borderCollapse: "collapse",
+    marginTop: 10,
+  },
+  miniTh: {
     textAlign: "left",
-    fontSize: 12,
+    fontSize: 11,
     color: COLORS.muted,
     borderBottom: `1px solid ${COLORS.border}`,
-    padding: "8px 10px",
+    padding: "4px 6px",
   },
-  tr: { borderBottom: `1px solid ${COLORS.border}` },
-  td: { padding: "8px 10px", fontSize: 14, verticalAlign: "middle" },
+  miniTd: {
+    fontSize: 13,
+    padding: "4px 6px",
+    borderBottom: `1px solid ${COLORS.border}`,
+  },
+  priceInputSmall: {
+    boxSizing: "border-box",
+    width: 90,
+    padding: "5px 7px",
+    borderRadius: 6,
+    border: `1px solid ${COLORS.border}`,
+    fontSize: 13,
+  },
+  unidadeRow: {
+    marginTop: 10,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
   priceInput: {
     boxSizing: "border-box",
     width: 110,
@@ -955,16 +1084,11 @@ const styles = {
     border: `1px solid ${COLORS.border}`,
     fontSize: 14,
   },
-  ordemButtons: { display: "flex", flexDirection: "column", gap: 2 },
-  ordemButton: {
-    width: 26,
-    height: 22,
-    borderRadius: 4,
-    border: `1px solid ${COLORS.border}`,
-    background: "#fff",
-    color: COLORS.text,
-    fontSize: 11,
-    cursor: "pointer",
+  lucroRow: {
+    marginTop: 10,
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
   },
   lucroBadge: {
     display: "inline-block",
