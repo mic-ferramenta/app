@@ -128,11 +128,15 @@ export default function NovaLista() {
   function irParaPrecificacao() {
     const inicial = {};
     listaSelecionados.forEach((g) => {
-      const base =
-        modoProduto === "grade"
-          ? Number(g.preco_venda ?? 0) * totalPecasGrade(g.grade_disponivel)
-          : Number(g.preco_venda ?? g.preco_custo ?? 0);
-      inicial[g.id] = { custo: base, final: base };
+      if (modoProduto === "grade") {
+        const custoUnitario = Number(g.preco_venda ?? 0);
+        const quantidade = totalPecasGrade(g.grade_disponivel);
+        const custo = custoUnitario * quantidade;
+        inicial[g.id] = { custoUnitario, quantidade, custo, final: custo };
+      } else {
+        const custo = Number(g.preco_venda ?? g.preco_custo ?? 0);
+        inicial[g.id] = { custo, final: custo };
+      }
     });
     setItensPreco(inicial);
     setOrdemManual(listaSelecionados.map((g) => g.id)); // começa em ordem alfabética
@@ -150,6 +154,11 @@ export default function NovaLista() {
     });
   }
 
+  // No modo grade, o R$ é aplicado sobre o preço UNITÁRIO e depois
+  // multiplicado pela quantidade -- assim, se a composição da grade
+  // mudar (grade 1 vira grade 2, por exemplo), o valor por peça
+  // continua o mesmo, só o total muda. O % dá na mesma conta dos dois
+  // jeitos, então não precisa dessa distinção.
   function aplicarEmMassa() {
     const valor = Number(valorAplicar);
     if (Number.isNaN(valor)) return;
@@ -157,12 +166,21 @@ export default function NovaLista() {
     setItensPreco((prev) => {
       const copy = { ...prev };
       for (const id of Object.keys(copy)) {
-        const custo = Number(copy[id].custo || 0);
-        const final =
-          modoAplicar === "percentual"
-            ? custo + custo * (valor / 100)
-            : custo + valor;
-        copy[id] = { ...copy[id], final: Number(final.toFixed(2)) };
+        const item = copy[id];
+        let final;
+
+        if (modoProduto === "grade") {
+          final =
+            modoAplicar === "percentual"
+              ? item.custo * (1 + valor / 100)
+              : (item.custoUnitario + valor) * item.quantidade;
+        } else {
+          const custo = Number(item.custo || 0);
+          final =
+            modoAplicar === "percentual" ? custo * (1 + valor / 100) : custo + valor;
+        }
+
+        copy[id] = { ...item, final: Number(final.toFixed(2)) };
       }
       return copy;
     });
@@ -358,6 +376,7 @@ export default function NovaLista() {
             </div>
 
             <label style={styles.validadeLabel}>
+              Validade da lista
               <input
                 type="date"
                 value={vencimento}
@@ -511,7 +530,9 @@ function TelaPrecificacao({
               style={styles.select}
             >
               <option value="percentual">% sobre o valor base</option>
-              <option value="valor">R$ sobre o valor base</option>
+              <option value="valor">
+                {modoProduto === "grade" ? "R$ sobre o custo unitário" : "R$ sobre o valor base"}
+              </option>
             </select>
             <input
               type="number"
@@ -533,6 +554,12 @@ function TelaPrecificacao({
               <tr>
                 <th style={styles.th}>Ordem</th>
                 <th style={styles.th}>Produto</th>
+                {mostrarPreco && modoProduto === "grade" && (
+                  <>
+                    <th style={styles.th}>Custo unitário</th>
+                    <th style={styles.th}>Qtd</th>
+                  </>
+                )}
                 {mostrarPreco && (
                   <>
                     <th style={styles.th}>Valor base</th>
@@ -578,6 +605,12 @@ function TelaPrecificacao({
                           : g.codigo}
                       </div>
                     </td>
+                    {mostrarPreco && modoProduto === "grade" && (
+                      <>
+                        <td style={styles.td}>{fmtMoeda(itensPreco[g.id]?.custoUnitario)}</td>
+                        <td style={styles.td}>{itensPreco[g.id]?.quantidade} peças</td>
+                      </>
+                    )}
                     {mostrarPreco && (
                       <>
                         <td style={styles.td}>{fmtMoeda(itensPreco[g.id]?.custo)}</td>
