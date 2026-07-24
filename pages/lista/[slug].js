@@ -7,7 +7,7 @@
 import { useState } from "react";
 import { supabaseAdmin } from "../../lib/supabaseAdmin";
 import { limparTamanho, ordenarVariacoes } from "../../lib/tamanhos";
-import { estoquePorTamanho, gradeQueCabe, composicaoTexto } from "../../lib/grades";
+import { estoquePorTamanho, gradesQueCabem } from "../../lib/grades";
 
 const LOGO_URL =
   "https://miccamisasdetime.com.br/cdn/shop/files/Design_sem_nome_-_2026-02-01T085034.319.png?v=1770226222&width=90";
@@ -37,19 +37,13 @@ function ItemLista({ item, mostrarPreco }) {
 
           {isGrade ? (
             <div style={styles.gradeInfo}>
-              {item.gradeAtual ? (
-                <>
-                  <span style={styles.gradeDisponivelBadge}>
-                    {item.gradeAtual.nome} disponível
-                  </span>
-                  <span style={styles.gradeComposicao}>
-                    {composicaoTexto(item.gradeAtual)}
-                  </span>
-                </>
-              ) : (
-                <span style={styles.gradeIndisponivelBadge}>
-                  Indisponível no momento
+              {item.gradesDisponiveisCount > 0 ? (
+                <span style={styles.gradeDisponivelBadge}>
+                  {item.gradesDisponiveisCount}{" "}
+                  {item.gradesDisponiveisCount === 1 ? "grade disponível" : "grades disponíveis"}
                 </span>
+              ) : (
+                <span style={styles.gradeIndisponivelBadge}>Grade indisponível</span>
               )}
             </div>
           ) : (
@@ -76,7 +70,7 @@ function ItemLista({ item, mostrarPreco }) {
             </div>
           )}
 
-          {mostrarPreco && (!isGrade || item.gradeAtual) && (
+          {mostrarPreco && (!isGrade || item.gradesDisponiveisCount > 0) && (
             <p style={styles.price}>
               {Number(item.preco).toLocaleString("pt-BR", {
                 style: "currency",
@@ -201,9 +195,9 @@ export async function getServerSideProps({ params }) {
       // A disponibilidade da grade é recalculada AGORA, com o estoque
       // atual -- nunca lida de um valor salvo. É por isso que o link
       // nunca fica "desatualizado": cada acesso reavalia do zero.
-      const gradeAtual = isGrade
-        ? gradeQueCabe(estoquePorTamanho(variacoes), grades)
-        : null;
+      const gradesDisponiveisCount = isGrade
+        ? gradesQueCabem(estoquePorTamanho(variacoes), grades).length
+        : 0;
 
       return {
         id: i.id,
@@ -212,7 +206,7 @@ export async function getServerSideProps({ params }) {
         nome: i.grupo.nome,
         imagem_url: i.grupo.imagem_url,
         variacoes,
-        gradeAtual,
+        gradesDisponiveisCount,
       };
     });
 

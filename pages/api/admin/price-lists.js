@@ -144,6 +144,7 @@ export default async function handler(req, res) {
         ordem: index,
         tipo: item.tipo === "grade" ? "grade" : "unidade",
         grade_id: item.tipo === "grade" ? item.grade_id || null : null,
+        precos_por_tamanho: item.tipo === "grade" ? item.precos_por_tamanho || null : null,
       }));
 
       const { error: itemsError } = await supabaseAdmin

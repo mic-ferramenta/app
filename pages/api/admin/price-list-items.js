@@ -1,6 +1,7 @@
 // pages/api/admin/price-list-items.js
 // POST   -> adiciona/atualiza um item de uma lista já existente. Aceita
-//           preco e/ou ordem -- manda só o que quer mudar.
+//           preco, ordem, tipo, grade_id, precos_por_tamanho -- manda
+//           só o que quer mudar.
 // DELETE -> remove um item de uma lista já existente
 import { requireAdmin } from "../../../lib/adminSession";
 import { supabaseAdmin } from "../../../lib/supabaseAdmin";
@@ -11,17 +12,27 @@ export default async function handler(req, res) {
   }
 
   if (req.method === "POST") {
-    const { price_list_id, pai_id, preco, ordem } = req.body || {};
+    const { price_list_id, pai_id, preco, ordem, tipo, grade_id, precos_por_tamanho } =
+      req.body || {};
+
     if (!price_list_id || !pai_id) {
       return res.status(400).json({ error: "Dados incompletos." });
     }
-    if (preco === undefined && ordem === undefined) {
-      return res.status(400).json({ error: "Nada para atualizar (preco ou ordem)." });
+    if (
+      preco === undefined &&
+      ordem === undefined &&
+      tipo === undefined &&
+      precos_por_tamanho === undefined
+    ) {
+      return res.status(400).json({ error: "Nada para atualizar." });
     }
 
     const row = { price_list_id, pai_id };
     if (preco !== undefined && preco !== "") row.preco = Number(preco);
     if (ordem !== undefined) row.ordem = Number(ordem);
+    if (tipo !== undefined) row.tipo = tipo === "grade" ? "grade" : "unidade";
+    if (grade_id !== undefined) row.grade_id = grade_id || null;
+    if (precos_por_tamanho !== undefined) row.precos_por_tamanho = precos_por_tamanho;
 
     const { error } = await supabaseAdmin
       .from("price_list_items")

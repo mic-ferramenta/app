@@ -12,7 +12,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { requireAdmin } from "../../lib/adminSession";
 import { COLORS } from "../../lib/theme";
-import { indiceOrdemTamanho } from "../../lib/tamanhos";
+import { totalItem, custoTotalItem, tamanhosOrdenados, precosPorTamanhoParaSalvar } from "../../lib/precificacao";
 import { composicaoTexto } from "../../lib/grades";
 import ProdutoGrupoCard from "../../components/ProdutoGrupoCard";
 import GradeProdutoCard from "../../components/GradeProdutoCard";
@@ -22,38 +22,6 @@ const LOGO_URL =
 
 const fmtMoeda = (v) =>
   Number(v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-
-// Tamanhos de uma grade, na ordem P/M/G/GG/2GG/3GG (não na ordem crua
-// que vier do objeto -- ver nota em lib/grades.js sobre jsonb).
-function tamanhosOrdenados(quantidades) {
-  return Object.keys(quantidades || {}).sort(
-    (a, b) => indiceOrdemTamanho(a) - indiceOrdemTamanho(b)
-  );
-}
-
-// Total em R$ de um item -- soma (preço do tamanho × quantidade do
-// tamanho) pra grade, ou é só o valor final direto pra unidade.
-function totalItem(item, modoProduto) {
-  if (!item) return 0;
-  if (modoProduto === "grade") {
-    return Object.entries(item.precos || {}).reduce(
-      (soma, [tam, p]) => soma + Number(p.final || 0) * Number(item.quantidades?.[tam] || 0),
-      0
-    );
-  }
-  return Number(item.final || 0);
-}
-
-function custoTotalItem(item, modoProduto) {
-  if (!item) return 0;
-  if (modoProduto === "grade") {
-    return Object.entries(item.precos || {}).reduce(
-      (soma, [tam, p]) => soma + Number(p.custo || 0) * Number(item.quantidades?.[tam] || 0),
-      0
-    );
-  }
-  return Number(item.custo || 0);
-}
 
 export default function NovaLista() {
   const [step, setStep] = useState("selecionar");
@@ -259,6 +227,8 @@ export default function NovaLista() {
       preco_final: totalItem(itensPreco[g.id], modoProduto),
       tipo: modoProduto,
       grade_id: modoProduto === "grade" ? g.grade_disponivel?.id : undefined,
+      precos_por_tamanho:
+        modoProduto === "grade" ? precosPorTamanhoParaSalvar(itensPreco[g.id]) : undefined,
     }));
 
     const resp = await fetch("/api/admin/price-lists", {

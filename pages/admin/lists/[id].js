@@ -1,21 +1,36 @@
 // pages/admin/lists/[id].js
-import { useState } from "react";
+//
+// Tela de edição de uma lista já gerada. A lógica de precificação
+// aqui é EXATAMENTE a mesma de pages/admin/nova-lista.js (mesmas
+// funções importadas de lib/precificacao.js) -- a única diferença é
+// que aqui cada mudança salva na hora, em vez de só no final.
+
+import { useRef, useState } from "react";
 import { requireAdmin } from "../../../lib/adminSession";
 import { supabaseAdmin } from "../../../lib/supabaseAdmin";
 import { COLORS } from "../../../lib/theme";
+import { totalItem, custoTotalItem, tamanhosOrdenados, precosPorTamanhoParaSalvar } from "../../../lib/precificacao";
+import { composicaoTexto } from "../../../lib/grades";
 
 const fmtMoeda = (v) =>
   Number(v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
 export default function ManageList({ lista, cliente, itensIniciais, listUrl, mostrarPreco }) {
-  const [itens, setItens] = useState(itensIniciais); // array: [{ pai_id, nome, codigo, custo, preco, ordem }]
+  // itens: array, na ordem de exibição. Cada item:
+  //   unidade -> { pai_id, nome, codigo, tipo:'unidade', custo, final }
+  //   grade   -> { pai_id, nome, codigo, tipo:'grade', gradeNome, gradeId, quantidades, precos }
+  const [itens, setItens] = useState(itensIniciais);
   const [copiado, setCopiado] = useState(false);
   const [busca, setBusca] = useState("");
   const [resultadosBusca, setResultadosBusca] = useState([]);
-  const [salvandoId, setSalvandoId] = useState(null);
   const [salvandoTudo, setSalvandoTudo] = useState(false);
   const [modoAplicar, setModoAplicar] = useState("percentual"); // percentual | valor
   const [valorAplicar, setValorAplicar] = useState("");
+  const [modoNovoItem, setModoNovoItem] = useState("unidade"); // só usado se a lista estiver vazia
+
+  // Uma lista é ou toda de unidades, ou toda de grades -- o modo é
+  // travado pelo que já existe; só é editável se a lista estiver vazia.
+  const modoLista = itens.length > 0 ? itens[0].tipo : modoNovoItem;
 
   function handleCopyLink() {
     navigator.clipboard.writeText(listUrl);
@@ -29,15 +44,38 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl, mos
       setResultadosBusca([]);
       return;
     }
-    const resp = await fetch(`/api/admin/product-groups?search=${encodeURIComponent(termo)}`);
+    const resp = await fetch(
+      `/api/admin/product-groups?search=${encodeURIComponent(termo)}&modo=${modoLista}`
+    );
     const data = await resp.json().catch(() => ({}));
     setResultadosBusca(data.groups || []);
   }
 
   async function adicionarProduto(grupo) {
-    setSalvandoId(grupo.id);
     const novaOrdem = itens.length;
-    const custoBase = Number(grupo.preco_venda ?? grupo.preco_custo ?? 0);
+    let novoItem;
+
+    if (modoLista === "grade") {
+      const custoUnitario = Number(grupo.preco_venda ?? 0);
+      const quantidades = grupo.grade_disponivel?.composicao || {};
+      const precos = {};
+      Object.keys(quantidades).forEach((tam) => {
+        precos[tam] = { custo: custoUnitario, final: custoUnitario };
+      });
+      novoItem = {
+        pai_id: grupo.id,
+        nome: grupo.nome,
+        codigo: grupo.codigo,
+        tipo: "grade",
+        gradeNome: grupo.grade_disponivel?.nome,
+        gradeId: grupo.grade_disponivel?.id,
+        quantidades,
+        precos,
+      };
+    } else {
+      const custo = Number(grupo.preco_venda ?? grupo.preco_custo ?? 0);
+      novoItem = { pai_id: grupo.id, nome: grupo.nome, codigo: grupo.codigo, tipo: "unidade", custo, final: custo };
+    }
 
     await fetch("/api/admin/price-list-items", {
       method: "POST",
@@ -45,47 +83,54 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl, mos
       body: JSON.stringify({
         price_list_id: lista.id,
         pai_id: grupo.id,
-        preco: custoBase,
+        preco: totalItem(novoItem, modoLista),
         ordem: novaOrdem,
+        tipo: modoLista,
+        grade_id: modoLista === "grade" ? novoItem.gradeId : null,
+        precos_por_tamanho: modoLista === "grade" ? precosPorTamanhoParaSalvar(novoItem) : null,
       }),
     });
 
-    setItens((prev) => [
-      ...prev,
-      {
-        pai_id: grupo.id,
-        nome: grupo.nome,
-        codigo: grupo.codigo,
-        custo: custoBase,
-        preco: String(custoBase),
-        ordem: novaOrdem,
-      },
-    ]);
-    setSalvandoId(null);
+    setItens((prev) => [...prev, novoItem]);
     setBusca("");
     setResultadosBusca([]);
   }
 
-  function handlePriceChange(paiId, value) {
+  function handleFinalManualUnidade(paiId, value) {
+    setItens((prev) => prev.map((i) => (i.pai_id === paiId ? { ...i, final: value } : i)));
+  }
+
+  function handleFinalManualGrade(paiId, tamanho, value) {
     setItens((prev) =>
-      prev.map((i) => (i.pai_id === paiId ? { ...i, preco: value } : i))
+      prev.map((i) =>
+        i.pai_id === paiId
+          ? { ...i, precos: { ...i.precos, [tamanho]: { ...i.precos[tamanho], final: value } } }
+          : i
+      )
     );
   }
 
-  // Aplica % ou R$ em cima do valor base de TODOS os itens da lista de
-  // uma vez -- só muda localmente; "Salvar alterações" que grava.
+  // Aplica % ou R$ sobre o preço-base de cada tamanho (grade) ou sobre
+  // o valor base do item (unidade) -- mesma lógica da criação.
   function aplicarEmMassa() {
     const valor = Number(valorAplicar);
     if (Number.isNaN(valor)) return;
 
     setItens((prev) =>
       prev.map((item) => {
+        if (item.tipo === "grade") {
+          const novosPrecos = {};
+          for (const tam of Object.keys(item.precos)) {
+            const custo = Number(item.precos[tam].custo || 0);
+            const final =
+              modoAplicar === "percentual" ? custo * (1 + valor / 100) : custo + valor;
+            novosPrecos[tam] = { ...item.precos[tam], final: Number(final.toFixed(2)) };
+          }
+          return { ...item, precos: novosPrecos };
+        }
         const custo = Number(item.custo || 0);
-        const novoPreco =
-          modoAplicar === "percentual"
-            ? custo + custo * (valor / 100)
-            : custo + valor;
-        return { ...item, preco: String(Number(novoPreco.toFixed(2))) };
+        const final = modoAplicar === "percentual" ? custo * (1 + valor / 100) : custo + valor;
+        return { ...item, final: Number(final.toFixed(2)) };
       })
     );
   }
@@ -93,14 +138,16 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl, mos
   async function salvarTodos() {
     setSalvandoTudo(true);
     await Promise.all(
-      itens.map((item) =>
+      itens.map((item, index) =>
         fetch("/api/admin/price-list-items", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             price_list_id: lista.id,
             pai_id: item.pai_id,
-            preco: item.preco,
+            preco: totalItem(item, item.tipo),
+            ordem: index,
+            precos_por_tamanho: item.tipo === "grade" ? precosPorTamanhoParaSalvar(item) : null,
           }),
         })
       )
@@ -109,42 +156,44 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl, mos
   }
 
   async function removerItem(paiId) {
-    setSalvandoId(paiId);
     await fetch("/api/admin/price-list-items", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ price_list_id: lista.id, pai_id: paiId }),
     });
     setItens((prev) => prev.filter((i) => i.pai_id !== paiId));
-    setSalvandoId(null);
   }
 
-  async function moverItem(paiId, direcao) {
-    const idx = itens.findIndex((i) => i.pai_id === paiId);
-    const novoIdx = idx + direcao;
-    if (idx === -1 || novoIdx < 0 || novoIdx >= itens.length) return;
+  // Arrastar-e-soltar pra reordenar -- mesma lógica da criação. Depois
+  // de soltar, persiste a ordem sequencial de todo mundo de uma vez.
+  const arrastandoIdRef = useRef(null);
 
-    const reordenados = [...itens];
-    [reordenados[idx], reordenados[novoIdx]] = [reordenados[novoIdx], reordenados[idx]];
-    const comOrdemNova = reordenados.map((item, i) => ({ ...item, ordem: i }));
-    setItens(comOrdemNova);
-
-    setSalvandoId(paiId);
-    const a = comOrdemNova[idx < novoIdx ? idx : novoIdx];
-    const b = comOrdemNova[idx < novoIdx ? novoIdx : idx];
-    await Promise.all([
-      fetch("/api/admin/price-list-items", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ price_list_id: lista.id, pai_id: a.pai_id, ordem: a.ordem }),
-      }),
-      fetch("/api/admin/price-list-items", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ price_list_id: lista.id, pai_id: b.pai_id, ordem: b.ordem }),
-      }),
-    ]);
-    setSalvandoId(null);
+  function handleDragStart(id) {
+    arrastandoIdRef.current = id;
+  }
+  function handleDragEnter(id) {
+    if (!arrastandoIdRef.current || arrastandoIdRef.current === id) return;
+    setItens((prev) => {
+      const from = prev.findIndex((i) => i.pai_id === arrastandoIdRef.current);
+      const to = prev.findIndex((i) => i.pai_id === id);
+      if (from === -1 || to === -1) return prev;
+      const copy = [...prev];
+      const [movido] = copy.splice(from, 1);
+      copy.splice(to, 0, movido);
+      return copy;
+    });
+  }
+  async function handleDragEnd() {
+    arrastandoIdRef.current = null;
+    await Promise.all(
+      itens.map((item, index) =>
+        fetch("/api/admin/price-list-items", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ price_list_id: lista.id, pai_id: item.pai_id, ordem: index }),
+        })
+      )
+    );
   }
 
   return (
@@ -162,6 +211,29 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl, mos
         <a href="/admin" style={styles.backLink}>← Voltar</a>
       </header>
 
+      {itens.length === 0 && (
+        <div style={styles.modoProdutoRow}>
+          <button
+            onClick={() => setModoNovoItem("unidade")}
+            style={{
+              ...styles.modoButton,
+              ...(modoNovoItem === "unidade" ? styles.modoButtonAtivo : {}),
+            }}
+          >
+            Por unidade
+          </button>
+          <button
+            onClick={() => setModoNovoItem("grade")}
+            style={{
+              ...styles.modoButton,
+              ...(modoNovoItem === "grade" ? styles.modoButtonAtivo : {}),
+            }}
+          >
+            Por grade
+          </button>
+        </div>
+      )}
+
       <div style={styles.addBox}>
         <input
           type="text"
@@ -173,12 +245,11 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl, mos
         {resultadosBusca.length > 0 && (
           <div style={styles.dropdown}>
             {resultadosBusca.map((g) => (
-              <div
-                key={g.id}
-                onClick={() => adicionarProduto(g)}
-                style={styles.dropdownItem}
-              >
+              <div key={g.id} onClick={() => adicionarProduto(g)} style={styles.dropdownItem}>
                 {g.nome} {g.codigo ? `(${g.codigo})` : ""}
+                {modoLista === "grade" && g.grade_disponivel && (
+                  <span style={{ color: COLORS.muted }}> · {g.grade_disponivel.nome}</span>
+                )}
               </div>
             ))}
           </div>
@@ -193,7 +264,9 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl, mos
             style={styles.select}
           >
             <option value="percentual">% sobre o valor base</option>
-            <option value="valor">R$ sobre o valor base</option>
+            <option value="valor">
+              {modoLista === "grade" ? "R$ sobre o preço de cada tamanho" : "R$ sobre o valor base"}
+            </option>
           </select>
           <input
             type="number"
@@ -206,115 +279,128 @@ export default function ManageList({ lista, cliente, itensIniciais, listUrl, mos
           <button onClick={aplicarEmMassa} style={styles.aplicarButton}>
             Aplicar a todos
           </button>
-          <button
-            onClick={salvarTodos}
-            disabled={salvandoTudo}
-            style={styles.salvarTudoButton}
-          >
+          <button onClick={salvarTodos} disabled={salvandoTudo} style={styles.salvarTudoButton}>
             {salvandoTudo ? "Salvando..." : "Salvar alterações"}
           </button>
         </div>
       )}
 
-      <main style={styles.tableWrap}>
-        <table style={styles.table}>
-          <thead>
-            <tr>
-              <th style={styles.th}>Ordem</th>
-              <th style={styles.th}>Produto</th>
-              {mostrarPreco && (
-                <>
-                  <th style={styles.th}>Valor base</th>
-                  <th style={styles.th}>Preço na lista</th>
-                  <th style={styles.th}>% de lucro</th>
-                </>
-              )}
-              <th style={styles.th}></th>
-            </tr>
-          </thead>
-          <tbody>
-            {itens.map((item, index) => {
-              const custo = Number(item.custo || 0);
-              const preco = Number(item.preco || 0);
-              const lucro = custo > 0 ? ((preco - custo) / custo) * 100 : null;
+      <p style={styles.arrastarDica}>Segure e arraste um item pela alça (⠿) para reordenar.</p>
 
-              return (
-                <tr key={item.pai_id} style={styles.tr}>
-                  <td style={styles.td}>
-                    <div style={styles.ordemButtons}>
-                      <button
-                        onClick={() => moverItem(item.pai_id, -1)}
-                        disabled={index === 0 || salvandoId === item.pai_id}
-                        title="Mover para cima"
-                        style={styles.ordemButton}
-                      >
-                        ▲
-                      </button>
-                      <button
-                        onClick={() => moverItem(item.pai_id, 1)}
-                        disabled={index === itens.length - 1 || salvandoId === item.pai_id}
-                        title="Mover para baixo"
-                        style={styles.ordemButton}
-                      >
-                        ▼
-                      </button>
-                    </div>
-                  </td>
-                  <td style={styles.td}>
-                    <div style={{ fontWeight: 600 }}>{item.nome}</div>
-                    <div style={{ fontSize: 12, color: COLORS.muted }}>{item.codigo}</div>
-                  </td>
-                  {mostrarPreco && (
-                    <>
-                      <td style={styles.td}>{fmtMoeda(item.custo)}</td>
-                      <td style={styles.td}>
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          value={item.preco ?? ""}
-                          onChange={(e) => handlePriceChange(item.pai_id, e.target.value)}
-                          style={styles.priceInput}
-                        />
-                      </td>
-                      <td style={styles.td}>
-                        {lucro === null ? (
-                          <span style={{ color: COLORS.muted }}>-</span>
-                        ) : (
-                          <span
-                            style={{
-                              ...styles.lucroBadge,
-                              color: lucro > 0 ? COLORS.stockOk : COLORS.danger,
-                              background: lucro > 0 ? COLORS.stockOkBg : "#fee2e2",
-                            }}
-                          >
-                            {lucro.toFixed(1)}%
-                          </span>
-                        )}
-                      </td>
-                    </>
-                  )}
-                  <td style={styles.td}>
-                    <button
-                      onClick={() => removerItem(item.pai_id)}
-                      disabled={salvandoId === item.pai_id}
-                      style={styles.removeButton}
+      <main style={styles.listaItens}>
+        {itens.map((item) => {
+          const custoTotal = custoTotalItem(item, item.tipo);
+          const finalTotal = totalItem(item, item.tipo);
+          const lucro = custoTotal > 0 ? ((finalTotal - custoTotal) / custoTotal) * 100 : null;
+
+          return (
+            <div
+              key={item.pai_id}
+              draggable
+              onDragStart={() => handleDragStart(item.pai_id)}
+              onDragEnter={() => handleDragEnter(item.pai_id)}
+              onDragEnd={handleDragEnd}
+              onDragOver={(e) => e.preventDefault()}
+              style={styles.itemCard}
+            >
+              <div style={styles.itemCardHeader}>
+                <span style={styles.dragHandle} title="Arraste para reordenar">⠿</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600 }}>{item.nome}</div>
+                  <div style={{ fontSize: 12, color: COLORS.muted }}>
+                    {item.tipo === "grade"
+                      ? `${item.gradeNome} · ${composicaoTexto({ composicao: item.quantidades })}`
+                      : item.codigo}
+                  </div>
+                </div>
+                {mostrarPreco && (
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: 11, color: COLORS.muted }}>Total</div>
+                    <div style={{ fontWeight: 700 }}>{fmtMoeda(finalTotal)}</div>
+                  </div>
+                )}
+                <button onClick={() => removerItem(item.pai_id)} style={styles.removeButton}>
+                  Remover
+                </button>
+              </div>
+
+              {mostrarPreco && item.tipo === "grade" && (
+                <table style={styles.miniTable}>
+                  <thead>
+                    <tr>
+                      <th style={styles.miniTh}>Tamanho</th>
+                      <th style={styles.miniTh}>Qtd</th>
+                      <th style={styles.miniTh}>Preço</th>
+                      <th style={styles.miniTh}>Subtotal</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tamanhosOrdenados(item.quantidades).map((tam) => {
+                      const qtd = Number(item.quantidades[tam] || 0);
+                      const precoFinal = Number(item.precos[tam]?.final || 0);
+                      return (
+                        <tr key={tam}>
+                          <td style={styles.miniTd}>{tam}</td>
+                          <td style={styles.miniTd}>{qtd}</td>
+                          <td style={styles.miniTd}>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={item.precos[tam]?.final ?? ""}
+                              onChange={(e) =>
+                                handleFinalManualGrade(item.pai_id, tam, e.target.value)
+                              }
+                              style={styles.priceInputSmall}
+                            />
+                          </td>
+                          <td style={styles.miniTd}>{fmtMoeda(precoFinal * qtd)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+
+              {mostrarPreco && item.tipo === "unidade" && (
+                <div style={styles.unidadeRow}>
+                  <span style={{ fontSize: 13, color: COLORS.muted }}>
+                    Valor base: {fmtMoeda(item.custo)}
+                  </span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={item.final ?? ""}
+                    onChange={(e) => handleFinalManualUnidade(item.pai_id, e.target.value)}
+                    style={styles.priceInput}
+                  />
+                </div>
+              )}
+
+              {mostrarPreco && (
+                <div style={styles.lucroRow}>
+                  <span style={{ fontSize: 12, color: COLORS.muted }}>% de lucro:</span>
+                  {lucro === null ? (
+                    <span style={{ color: COLORS.muted }}>-</span>
+                  ) : (
+                    <span
+                      style={{
+                        ...styles.lucroBadge,
+                        color: lucro > 0 ? COLORS.stockOk : COLORS.danger,
+                        background: lucro > 0 ? COLORS.stockOkBg : "#fee2e2",
+                      }}
                     >
-                      Remover
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-            {itens.length === 0 && (
-              <tr>
-                <td style={styles.td} colSpan={mostrarPreco ? 6 : 3}>
-                  Nenhum item nesta lista ainda.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+                      {lucro.toFixed(1)}%
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {itens.length === 0 && <p style={styles.vazio}>Nenhum item nesta lista ainda.</p>}
       </main>
     </div>
   );
@@ -338,12 +424,10 @@ export async function getServerSideProps({ req, params }) {
   const { data: itensRaw } = await supabaseAdmin
     .from("price_list_items")
     .select(
-      "preco, ordem, grupo:pai_id ( id, nome, codigo, preco_venda, preco_custo )"
+      "preco, ordem, tipo, precos_por_tamanho, grade:grade_id ( id, nome, composicao ), grupo:pai_id ( id, nome, codigo, preco_venda, preco_custo )"
     )
     .eq("price_list_id", id);
 
-  // Ordena pela "ordem" salva; itens antigos sem ordem definida (null)
-  // caem no fim, ordenados por nome.
   const itensOrdenados = (itensRaw || [])
     .filter((i) => i.grupo)
     .sort((a, b) => {
@@ -355,14 +439,39 @@ export async function getServerSideProps({ req, params }) {
       return a.ordem - b.ordem;
     });
 
-  const itensIniciais = itensOrdenados.map((i, index) => ({
-    pai_id: i.grupo.id,
-    nome: i.grupo.nome,
-    codigo: i.grupo.codigo,
-    custo: Number(i.grupo.preco_venda ?? i.grupo.preco_custo ?? 0),
-    preco: String(i.preco),
-    ordem: i.ordem ?? index,
-  }));
+  const itensIniciais = itensOrdenados.map((i) => {
+    if (i.tipo === "grade") {
+      const quantidades = i.grade?.composicao || {};
+      const custoUnitario = Number(i.grupo.preco_venda ?? 0);
+      const precos = {};
+      Object.keys(quantidades).forEach((tam) => {
+        const salvo = i.precos_por_tamanho?.[tam];
+        precos[tam] = {
+          custo: custoUnitario,
+          final: salvo !== undefined && salvo !== null ? Number(salvo) : custoUnitario,
+        };
+      });
+      return {
+        pai_id: i.grupo.id,
+        nome: i.grupo.nome,
+        codigo: i.grupo.codigo,
+        tipo: "grade",
+        gradeNome: i.grade?.nome || "Grade",
+        gradeId: i.grade?.id,
+        quantidades,
+        precos,
+      };
+    }
+
+    return {
+      pai_id: i.grupo.id,
+      nome: i.grupo.nome,
+      codigo: i.grupo.codigo,
+      tipo: "unidade",
+      custo: Number(i.grupo.preco_venda ?? i.grupo.preco_custo ?? 0),
+      final: Number(i.preco),
+    };
+  });
 
   const proto = req.headers["x-forwarded-proto"] || "https";
   const baseUrl = `${proto}://${req.headers.host}`;
@@ -408,6 +517,22 @@ const styles = {
     cursor: "pointer",
   },
   backLink: { color: COLORS.accent, fontSize: 14, textDecoration: "none" },
+  modoProdutoRow: { maxWidth: 1100, margin: "0 auto 16px", display: "flex", gap: 8 },
+  modoButton: {
+    padding: "8px 16px",
+    borderRadius: 999,
+    border: `1px solid ${COLORS.border}`,
+    background: "#fff",
+    color: COLORS.text,
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: "pointer",
+  },
+  modoButtonAtivo: {
+    borderColor: COLORS.accent,
+    background: COLORS.accentSoft,
+    color: COLORS.accent,
+  },
   addBox: { maxWidth: 1100, margin: "0 auto 16px", position: "relative" },
   search: {
     boxSizing: "border-box",
@@ -438,11 +563,17 @@ const styles = {
   },
   aplicarBox: {
     maxWidth: 1100,
-    margin: "0 auto 20px",
+    margin: "0 auto 12px",
     display: "flex",
     gap: 10,
     alignItems: "center",
     flexWrap: "wrap",
+  },
+  arrastarDica: {
+    maxWidth: 1100,
+    margin: "0 auto 16px",
+    fontSize: 12,
+    color: COLORS.muted,
   },
   select: {
     boxSizing: "border-box",
@@ -479,17 +610,62 @@ const styles = {
     fontWeight: 700,
     cursor: "pointer",
   },
-  tableWrap: { maxWidth: 1100, margin: "0 auto", overflowX: "auto" },
-  table: { width: "100%", borderCollapse: "collapse" },
-  th: {
+  listaItens: {
+    maxWidth: 1100,
+    margin: "0 auto",
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+  },
+  itemCard: {
+    border: `1px solid ${COLORS.border}`,
+    borderRadius: 10,
+    padding: 12,
+    background: "#fff",
+  },
+  itemCardHeader: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+  },
+  dragHandle: {
+    cursor: "grab",
+    fontSize: 18,
+    color: COLORS.muted,
+    userSelect: "none",
+  },
+  miniTable: {
+    width: "100%",
+    borderCollapse: "collapse",
+    marginTop: 10,
+  },
+  miniTh: {
     textAlign: "left",
-    fontSize: 12,
+    fontSize: 11,
     color: COLORS.muted,
     borderBottom: `1px solid ${COLORS.border}`,
-    padding: "8px 10px",
+    padding: "4px 6px",
   },
-  tr: { borderBottom: `1px solid ${COLORS.border}` },
-  td: { padding: "8px 10px", fontSize: 14, verticalAlign: "middle" },
+  miniTd: {
+    fontSize: 13,
+    padding: "4px 6px",
+    borderBottom: `1px solid ${COLORS.border}`,
+  },
+  priceInputSmall: {
+    boxSizing: "border-box",
+    width: 90,
+    padding: "5px 7px",
+    borderRadius: 6,
+    border: `1px solid ${COLORS.border}`,
+    fontSize: 13,
+  },
+  unidadeRow: {
+    marginTop: 10,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
   priceInput: {
     boxSizing: "border-box",
     width: 110,
@@ -498,16 +674,11 @@ const styles = {
     border: `1px solid ${COLORS.border}`,
     fontSize: 14,
   },
-  ordemButtons: { display: "flex", flexDirection: "column", gap: 2 },
-  ordemButton: {
-    width: 26,
-    height: 22,
-    borderRadius: 4,
-    border: `1px solid ${COLORS.border}`,
-    background: "#fff",
-    color: COLORS.text,
-    fontSize: 11,
-    cursor: "pointer",
+  lucroRow: {
+    marginTop: 10,
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
   },
   lucroBadge: {
     display: "inline-block",
@@ -525,4 +696,5 @@ const styles = {
     fontSize: 12,
     cursor: "pointer",
   },
+  vazio: { maxWidth: 1100, margin: "0 auto", fontSize: 13, color: COLORS.muted },
 };
